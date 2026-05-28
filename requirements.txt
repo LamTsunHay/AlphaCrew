@@ -1,0 +1,9 @@
+anthropic
+yfinance
+pandas
+numpy
+chromadb
+aiohttp
+schedule
+python-dotenv
+pytz

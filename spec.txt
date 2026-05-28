@@ -1,0 +1,807 @@
+# STRATEGY ENGINE v5.1 — CLAUDE CODE SPECIFICATION
+## Complete Production Prompt for Claude Code Terminal
+
+## ARCHITECTURAL DECISIONS LOCKED IN THIS SPEC
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Stage 3 LLM | `claude-haiku-4-5` | Cost-effective, same vendor, no second API key |
+| Stage 4 LLM | `claude-sonnet-4-6` | Premium audit + strategy formatting |
+| News Feed | Polygon.io REST API | Cost-effective, same key covers future options data |
+| EASS Component 2 | Whisper stub placeholder | Add later — documented clearly in code |
+| EASS Component 3 | Skipped entirely | Add later when Polygon options feed activated |
+| ChromaDB Confidence < 40 | Log as INSUFFICIENT, skip trade | Capital protection over forcing a low-confidence entry |
+| Vector DB | ChromaDB local persistence | Free, no cloud dependency |
+| Free data layer | yfinance | No cost, covers all pre-paid gates |
+
+---
+
+## MODULE ARCHITECTURE
+
+```
+project/
+├── CLAUDE.md                        ← Claude Code project memory
+├── config.py                        ← Global constants and thresholds
+├── scheduler.py                     ← Cron loop: 8:05 AM + 9:45 AM EST
+├── regime_engine.py                 ← Macro + sector alpha filters
+├── database.py                      ← ChromaDB setup + hierarchical collections
+├── pipeline.py                      ← EASS calculation + Polygon news gate
+├── risk_auditor.py                  ← Claude Haiku summary + Sonnet audit
+├── earnings_calendar.csv            ← Local earnings date reference
+├── final_strategy_blueprint.md      ← Output: formatted strategy card
+└── active_monitoring_queue.json     ← Output: live logging queue
+```
+
+---
+
+## SECTION: MASTER PROMPT
+
+---
+
+Paste everything below this line into Claude Code:
+
+---
+
+```
+ROLE: Senior Quantitative Developer
+TASK: Build a complete, production-ready Python strategy suggestion engine 
+following the exact specification below. Write every file in full — no 
+placeholders, no ellipses, no TODO stubs except where explicitly marked 
+as FUTURE_STUB. All logic must be self-contained and executable.
+
+================================================================================
+PART 1: CLAUDE.md — PROJECT MEMORY FILE
+================================================================================
+
+Create a CLAUDE.md file at project root with the following content:
+
+# Strategy Engine v5.1 — Project Memory
+
+## Architecture
+- 6-module Python system: config, scheduler, regime_engine, database, pipeline, risk_auditor
+- Two execution phases: 8:05 AM EST (pre-market screening) and 9:45 AM EST (live confirmation)
+- Cost-minimization principle: ALL free data gates run before ANY paid API call
+
+## Critical Rules
+- Never call Polygon.io news API before Step 1.6
+- Never call any LLM before Step 1.6
+- ChromaDB collections are strictly partitioned by catalyst type — never cross-query
+- EASS uses 3 components only (analyst + whisper_stub + guidance). Options component is FUTURE_STUB
+- If ChromaDB returns < 40 samples, output INSUFFICIENT_CONFIDENCE and skip trade
+
+## LLM Models
+- Stage 3 fast summarization: claude-haiku-4-5-20251001
+- Stage 4 premium audit: claude-sonnet-4-6
+
+## API Keys Required (set in .env)
+- ANTHROPIC_API_KEY
+- POLYGON_API_KEY
+
+## Output Files
+- final_strategy_blueprint.md: final formatted strategy card
+- active_monitoring_queue.json: live logging of all pipeline decisions
+
+## Naming Conventions
+- All ChromaDB collections: lowercase_underscore catalyst type names
+- All vector dimensions: normalized 0.0 to 1.0
+- All returns stored as decimal (0.05 = 5%)
+
+================================================================================
+PART 2: config.py
+================================================================================
+
+Create config.py with the following exact constants:
+
+SYSTEM_TIMEZONE             = "US/Eastern"
+STRATEGY_OUTPUT_PATH        = "./final_strategy_blueprint.md"
+LOG_QUEUE_PATH              = "./active_monitoring_queue.json"
+
+# LLM Models
+LLM_STAGE_3_FAST            = "claude-haiku-4-5-20251001"
+LLM_STAGE_4_PREMIUM         = "claude-sonnet-4-6"
+LLM_MAX_TOKENS              = 1000
+
+# Regime Filter
+REGIME_INDICATOR            = "SPY"
+REGIME_SMA_PERIOD           = 50
+
+# Volatility and Trend Gates
+VOLATILITY_CEILING_RATIO    = 0.10
+TREND_EMA_FAST              = 21
+TREND_EMA_SLOW              = 200
+
+# Institutional Volume Gates
+INSTITUTIONAL_RVOL_FLOOR    = 3.0
+LIQUIDITY_FLOOR_ADV_30D     = 2_000_000
+PRE_MARKET_MIN_VOLUME       = 50_000
+PRE_MARKET_MIN_GAP_PCT      = 0.015
+
+# Earnings Proximity Gate
+EARNINGS_EXCLUSION_DAYS     = 5
+
+# Risk Parameters
+STANDARD_ACCOUNT_RISK       = 0.010
+BEARISH_REGIME_MUTATOR      = 0.500
+
+# EASS Weights (3-component version — options component reserved for future)
+EASS_WEIGHTS = {
+    "analyst_surprise"  : 0.45,
+    "whisper_surprise"  : 0.00,   # FUTURE_STUB — weight is 0 until whisper feed added
+    "guidance_delta"    : 0.55,
+}
+
+# Shock Weight Matrix (used for catalyst type classification only — not EASS math)
+SHOCK_WEIGHT_MATRIX = {
+    "corporate_guidance"    : 1.00,
+    "mergers_acquisitions"  : 0.95,
+    "earnings"              : 0.90,
+    "fda_regulatory"        : 0.90,
+    "analyst_color"         : 0.40,
+    "market_movers"         : 0.30,
+}
+
+# ChromaDB
+VECTOR_DB_PATH              = "./chroma_db"
+VECTOR_DB_MIN_SAMPLES       = 40
+VECTOR_DB_MAX_DISTANCE      = 0.35
+
+# ChromaDB collection names — one per catalyst family
+# CRITICAL: Never cross-query between collections
+CATALYST_COLLECTIONS = [
+    "earnings_beat_large",
+    "earnings_beat_small",
+    "earnings_miss",
+    "revenue_beat_only",
+    "guidance_raise_full",
+    "guidance_raise_partial",
+    "guidance_cut",
+    "fda_approval_nda",
+    "fda_approval_fast_track",
+    "fda_rejection",
+    "ma_acquirer",
+    "ma_target",
+    "buyback_initiation",
+    "government_contract",
+    "commercial_contract",
+]
+
+# Sector ETF universe for rotation filter
+SECTOR_ETFS = {
+    "XLK": "Technology",
+    "XLF": "Financials",
+    "XLV": "Healthcare",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLP": "Consumer Staples",
+    "XLY": "Consumer Discretionary",
+    "XLB": "Materials",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLC": "Communication Services",
+}
+TOP_SECTOR_COUNT            = 3
+SECTOR_LOOKBACK_DAYS        = 5
+
+================================================================================
+PART 3: database.py
+================================================================================
+
+Create database.py implementing the hierarchical ChromaDB architecture.
+
+Import: chromadb, numpy, json, datetime, config
+
+Implement the following functions in full:
+
+--- FUNCTION: initialize_database() ---
+Connect to ChromaDB at VECTOR_DB_PATH using PersistentClient.
+Loop through every name in CATALYST_COLLECTIONS.
+For each name, call get_or_create_collection(name).
+Return the client object.
+Print confirmation of how many collections are ready.
+
+--- FUNCTION: build_regime_vector(regime_data: dict) -> list[float] ---
+Produce an 8-dimensional normalized vector.
+Each dimension must be normalized to 0.0–1.0 using a local normalize() helper.
+
+Implement normalize(value, min_val, max_val) -> float that clips to [0,1].
+
+Dimensions in order:
+  [0] spy_pct_above_50sma     normalize(value, min=-0.15, max=0.15)
+  [1] sector_5d_vs_spy        normalize(value, min=-0.05, max=0.05)
+  [2] vix_level               normalize(value, min=10,    max=45)   inverted: 1 - normalized
+  [3] sector_rank             normalize(value, min=1,     max=3)    inverted: 1 - normalized
+  [4] pct_above_200ema        normalize(value, min=0,     max=0.30)
+  [5] premarket_gap_pct       normalize(value, min=0.015, max=0.20)
+  [6] rvol_945                normalize(value, min=1.0,   max=15.0)
+  [7] quarter                 normalize(value, min=1,     max=4)
+
+--- FUNCTION: build_catalyst_vector(catalyst_data: dict, catalyst_type: str) -> list[float] ---
+Return a 4-dimensional normalized vector.
+Branch by catalyst_type prefix:
+
+If catalyst_type starts with "earnings" or "revenue":
+  [0] normalize(eps_surprise_pct,      min=-0.30, max=0.50)
+  [1] normalize(revenue_surprise_pct,  min=-0.20, max=0.30)
+  [2] normalize(guidance_delta_pct,    min=-0.20, max=0.20)
+  [3] normalize(analyst_revision_count,min=0,     max=25)
+
+If catalyst_type starts with "guidance":
+  [0] normalize(eps_guidance_delta_pct,     min=-0.30, max=0.30)
+  [1] normalize(revenue_guidance_delta_pct, min=-0.20, max=0.20)
+  [2] float(ceo_statement_positive)   (1.0 or 0.0)
+  [3] normalize(days_to_next_earnings, min=6, max=90)
+
+If catalyst_type starts with "fda":
+  [0] float(was_expected)             (1.0 or 0.0)
+  [1] float(has_competitor)           (1.0 or 0.0)
+  [2] normalize(market_cap_billions,  min=0.1,  max=50)
+  [3] normalize(pipeline_depth,       min=1,    max=20)
+
+If catalyst_type starts with "ma" or "buyback":
+  [0] normalize(premium_pct,          min=0,    max=0.60)
+  [1] float(cash_deal)                (1.0 or 0.0)
+  [2] normalize(deal_size_billions,   min=0.1,  max=100)
+  [3] float(hostile_bid)              (1.0 or 0.0)
+
+If catalyst_type starts with "government" or "commercial":
+  [0] normalize(contract_value_millions, min=1, max=5000)
+  [1] float(multi_year)               (1.0 or 0.0)
+  [2] float(sole_source)              (1.0 or 0.0)
+  [3] normalize(margin_impact_pct,    min=0,    max=0.05)
+
+Default fallback: return [0.5, 0.5, 0.5, 0.5]
+
+--- FUNCTION: store_setup(client, catalyst_type, regime_data, catalyst_data, outcome) ---
+Build full 12-dimensional vector = build_regime_vector() + build_catalyst_vector()
+Get the correct collection by catalyst_type name.
+Call collection.add() with:
+  embeddings = [full_vector]
+  ids        = [unique string: ticker + "_" + date string]
+  metadatas  = [{
+      "ticker"             : outcome["ticker"],
+      "date"               : outcome["date"],
+      "catalyst_type"      : catalyst_type,
+      "day1_return"        : outcome["day1_return"],
+      "day3_return"        : outcome["day3_return"],
+      "max_adverse_move"   : outcome["max_adverse_move"],
+      "held_above_21ema"   : outcome["held_above_21ema"],
+      "regime_at_exit"     : outcome["regime_at_exit"],
+      "exit_trigger"       : outcome["exit_trigger"],
+  }]
+
+--- FUNCTION: query_similar_setups(client, catalyst_type, regime_data, catalyst_data) -> dict ---
+Build query vector = build_regime_vector() + build_catalyst_vector()
+Get the correct collection by catalyst_type.
+Call collection.query() with n_results=80, include=["metadatas","distances"]
+Filter results where distance < VECTOR_DB_MAX_DISTANCE.
+Pass filtered matches to calculate_outcome_profile() and return result.
+
+--- FUNCTION: calculate_outcome_profile(matches: list) -> dict ---
+If len(matches) < VECTOR_DB_MIN_SAMPLES:
+  Return:
+  {
+    "confidence"    : "INSUFFICIENT",
+    "sample_size"   : len(matches),
+    "action"        : "SKIP_TRADE",
+    "reason"        : "Insufficient historical samples for reliable probability estimate.",
+    "win_rate_day1" : None,
+    "win_rate_day3" : None,
+    "expected_value": None,
+    "suggested_stop": None,
+    "suggested_target": None,
+  }
+
+Otherwise compute from matches list:
+  day1_returns    = [m["day1_return"] for m in matches]
+  day3_returns    = [m["day3_return"] for m in matches]
+  adverse_moves   = [m["max_adverse_move"] for m in matches]
+
+  winners_d3      = [r for r in day3_returns if r > 0]
+  losers_d3       = [r for r in day3_returns if r <= 0]
+
+  win_rate_d1     = mean of (r > 0 for r in day1_returns)
+  win_rate_d3     = mean of (r > 0 for r in day3_returns)
+  avg_gain        = mean of winners_d3 if any else 0
+  avg_loss        = abs(mean of losers_d3) if any else 0
+  loss_rate       = 1 - win_rate_d3
+  expected_value  = (win_rate_d3 * avg_gain) - (loss_rate * avg_loss)
+
+  confidence classification:
+    >= 150 samples  → "HIGH"
+    >= 80  samples  → "MODERATE"
+    >= 40  samples  → "LOW"
+
+  Return full dict:
+  {
+    "confidence"          : classified string,
+    "sample_size"         : int,
+    "action"              : "PROCEED" if expected_value > 0 else "SKIP_TRADE",
+    "win_rate_day1"       : float rounded 4dp,
+    "win_rate_day3"       : float rounded 4dp,
+    "avg_gain_winners"    : float rounded 4dp,
+    "avg_loss_losers"     : float rounded 4dp,
+    "expected_value"      : float rounded 4dp,
+    "avg_max_adverse"     : mean of adverse_moves rounded 4dp,
+    "adverse_95pct"       : 95th percentile of adverse_moves rounded 4dp,
+    "pct_held_above_21ema": mean of (m["held_above_21ema"] for m in matches) rounded 4dp,
+    "suggested_stop"      : 75th percentile of adverse_moves (as negative float) rounded 4dp,
+    "suggested_target"    : mean of winners_d3 rounded 4dp if any else None,
+  }
+
+================================================================================
+PART 4: regime_engine.py
+================================================================================
+
+Create regime_engine.py using yfinance and pandas only. No paid APIs anywhere in this file.
+
+Import: yfinance, pandas, numpy, datetime, config
+
+--- FUNCTION: get_market_regime() -> dict ---
+Download 60 days of SPY daily close via yf.download("SPY", period="60d")
+Compute 50-day SMA on close prices.
+Latest_close = most recent close.
+Latest_sma   = most recent SMA value.
+pct_above    = (latest_close - latest_sma) / latest_sma
+
+Return:
+{
+  "regime"         : "BULLISH" if latest_close > latest_sma else "BEARISH",
+  "spy_close"      : latest_close,
+  "spy_sma50"      : latest_sma,
+  "pct_above_50sma": pct_above,
+}
+
+--- FUNCTION: get_top_sectors() -> dict ---
+Download 10 days of daily close for all 11 sector ETFs in SECTOR_ETFS plus SPY via yf.download()
+For each sector ETF compute 5-day return: (close[-1] - close[-6]) / close[-6]
+Compute SPY 5-day return same way.
+Compute relative_5d = sector_5d_return - spy_5d_return for each sector.
+Sort sectors by relative_5d descending.
+Retain only top TOP_SECTOR_COUNT sectors.
+
+Return:
+{
+  "top_sectors"     : list of top sector ETF tickers,
+  "sector_rankings" : dict of {ticker: relative_5d_return} for all sectors sorted,
+  "spy_5d_return"   : float,
+}
+
+--- FUNCTION: filter_by_sector(tickers: list, top_sectors: list) -> list ---
+For each ticker, look up its sector using yf.Ticker(ticker).info["sector"]
+Map sector name to ETF ticker using a local lookup dict matching SECTOR_ETFS values to keys.
+Retain only tickers whose mapped ETF is in top_sectors list.
+Return filtered list.
+
+--- FUNCTION: apply_individual_gates(tickers: list) -> list ---
+For each ticker download 220 days of daily price data via yfinance.
+Compute:
+  ATR14: 14-day average of (high - low)
+  Price: latest close
+  volatility_ratio: ATR14 / Price
+  EMA21:  21-day EMA of close
+  EMA200: 200-day EMA of close
+
+Apply gates in order:
+  VOLATILITY GATE: drop if volatility_ratio > VOLATILITY_CEILING_RATIO
+  TREND GATE:      drop if Price <= EMA200 OR Price <= EMA21
+
+Return list of surviving tickers with their computed metrics dict.
+
+--- FUNCTION: apply_earnings_gate(tickers_with_metrics: list) -> list ---
+Load earnings_calendar.csv into a dataframe (columns: ticker, next_earnings_date)
+For each ticker check if next_earnings_date - today <= EARNINGS_EXCLUSION_DAYS calendar days.
+Drop if true.
+If ticker not found in CSV, keep it (conservative — do not drop on missing data).
+Return filtered list.
+
+--- FUNCTION: apply_sector_leadership_gate(tickers_with_metrics: list) -> list ---
+Group tickers by their sub-industry (use yf.Ticker(t).info["industry"])
+Within each group, retain only the ticker with the highest pre_market_gap_pct.
+pre_market_gap_pct must already be present in each ticker's metrics dict.
+Return deduplicated list — one leader per sub-industry.
+
+================================================================================
+PART 5: pipeline.py
+================================================================================
+
+Create pipeline.py implementing the EASS calculation and Polygon.io news gate.
+
+Import: aiohttp, asyncio, anthropic, json, datetime, os, config, database
+
+--- FUNCTION: async fetch_polygon_news(ticker: str, session: aiohttp.ClientSession) -> list ---
+Build URL: https://api.polygon.io/v2/reference/news
+Params: ticker=ticker, limit=10, order=desc, sort=published_utc, apiKey=os.environ["POLYGON_API_KEY"]
+Execute GET request.
+Parse JSON response and return list of article dicts.
+Each article dict must contain: title, description, published_utc, keywords, tickers.
+On any HTTP error return empty list and log the error.
+
+--- FUNCTION: classify_catalyst_type(article: dict) -> str ---
+Examine title and description text (lowercase).
+Apply keyword matching in priority order:
+
+  If "acquisition" or "merger" or " acquire" in text → return "ma_acquirer"
+  If "acquired" or "takeover" in text                → return "ma_target"
+  If "fda" and "approved" in text                    → return "fda_approval_nda"
+  If "fda" and "fast track" in text                  → return "fda_approval_fast_track"
+  If "fda" and ("reject" or "complete response") in text → return "fda_rejection"
+  If "buyback" or "repurchase" in text               → return "buyback_initiation"
+  If "contract" and ("department of defense" or "government" or "federal") in text → return "government_contract"
+  If "contract" in text                              → return "commercial_contract"
+  If "guidance" and ("raise" or "increase" or "above") in text → return "guidance_raise_full"
+  If "guidance" and ("cut" or "lower" or "below") in text      → return "guidance_cut"
+  If "earnings" or "eps" or "beat" in text           → return "earnings_beat_large"
+  
+  Default: return "market_movers"
+
+--- FUNCTION: extract_eass_inputs(articles: list, ticker: str) -> dict ---
+Parse article text to extract numerical values where detectable using regex:
+
+  Pattern for EPS: r'\$?([\d.]+)\s*(?:vs\.?|versus)\s*\$?([\d.]+)\s*(?:expected|estimate|consensus)'
+  Pattern for revenue: r'\$([\d.]+)([BM])\s*(?:vs\.?|versus)\s*\$([\d.]+)([BM])'
+  Pattern for guidance raise: r'(?:raises?|increases?)\s*(?:full.year|fiscal)\s*(?:guidance|outlook)\s*to\s*\$?([\d.]+)'
+
+Return dict:
+{
+  "actual_eps"           : float or None,
+  "consensus_eps"        : float or None,
+  "actual_revenue"       : float or None,  (normalized to billions)
+  "consensus_revenue"    : float or None,
+  "guidance_raised"      : bool,
+  "guidance_cut"         : bool,
+  "guidance_delta_pct"   : float or 0.0,
+  "ceo_statement_positive": bool,           (True if "record", "strong", "exceeded" in text)
+  "raw_text_combined"    : str,             (all article titles + descriptions joined)
+}
+
+--- FUNCTION: calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict ---
+Implement the 3-component EASS formula using weights from config.EASS_WEIGHTS.
+
+COMPONENT 1 — analyst_surprise:
+  If actual_eps and consensus_eps are both not None:
+    raw = (actual_eps - consensus_eps) / abs(consensus_eps)
+    Apply sandbagging_penalty = 0.0 (no history yet — set to 0 on first deployment)
+    analyst_component = raw * (1 - sandbagging_penalty)
+  Else:
+    analyst_component = 0.0
+
+COMPONENT 2 — whisper_surprise (FUTURE_STUB):
+  whisper_component = 0.0
+  # FUTURE_STUB: When whisper feed is added, implement whisper_surprise() here.
+  # Weight in config.EASS_WEIGHTS["whisper_surprise"] is already set to 0.00
+  # so this component has zero effect until activated.
+
+COMPONENT 3 — guidance_delta:
+  If guidance_raised is True:
+    guidance_component = guidance_delta_pct if guidance_delta_pct > 0 else 0.10
+  Elif guidance_cut is True:
+    guidance_component = guidance_delta_pct if guidance_delta_pct < 0 else -0.15
+    guidance_component *= 2.50   # Amplify negative guidance heavily
+  Else:
+    guidance_component = 0.0
+
+raw_eass = (
+    EASS_WEIGHTS["analyst_surprise"] * analyst_component +
+    EASS_WEIGHTS["whisper_surprise"] * whisper_component +
+    EASS_WEIGHTS["guidance_delta"]   * guidance_component
+)
+
+Normalize raw_eass to -10.0 to +10.0 scale:
+  normalized = max(-10.0, min(10.0, raw_eass * 20))
+
+Classify signal_quality:
+  If analyst_component > 0 and guidance_component > 0  → "CONFIRMED_BULLISH"
+  If analyst_component > 0 and guidance_component < 0  → "GUIDANCE_DESTRUCTION_RISK"
+  If analyst_component < 0 and guidance_component < 0  → "CONFIRMED_BEARISH"
+  If analyst_component > 0 and guidance_component == 0 → "ANALYST_BEAT_ONLY"
+  Default                                              → "MIXED_SIGNAL"
+
+Return:
+{
+  "eass_score"          : normalized float rounded 4dp,
+  "analyst_component"   : analyst_component rounded 4dp,
+  "whisper_component"   : 0.0,
+  "guidance_component"  : guidance_component rounded 4dp,
+  "signal_quality"      : string,
+  "catalyst_type"       : catalyst_type,
+  "raw_text_combined"   : eass_inputs["raw_text_combined"],
+}
+
+--- FUNCTION: async summarize_news_haiku(raw_text: str, ticker: str, client: anthropic.Anthropic) -> str ---
+Call Anthropic API using LLM_STAGE_3_FAST model.
+System prompt: "You are a financial analyst. Summarize the key catalyst facts in exactly 3 sentences. 
+Include: what happened, the numerical magnitude, and the forward implication. Be factual only."
+User message: f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}"
+max_tokens = LLM_MAX_TOKENS
+Return the text content of the response.
+
+--- ASYNC FUNCTION: run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client) -> list ---
+This is the main pipeline coordinator. Only called after all free gates have passed.
+
+Open a single aiohttp.ClientSession for the entire function scope.
+For each ticker in tickers_with_metrics:
+  1. Fetch Polygon news articles.
+  2. If no articles returned: log "NO_CATALYST_FOUND" and skip ticker.
+  3. Classify catalyst type from top article.
+  4. If catalyst_type == "market_movers": log "LOW_WEIGHT_CATALYST" and skip ticker.
+  5. Extract EASS inputs.
+  6. Calculate EASS.
+  7. If eass_score < 2.0: log "EASS_BELOW_THRESHOLD" and skip ticker.
+  8. Summarize news via Haiku.
+  9. Build catalyst_data dict from eass_inputs for ChromaDB vector.
+  10. Query ChromaDB for similar historical setups.
+  11. If outcome_profile["action"] == "SKIP_TRADE": log result and skip.
+  12. Assemble full candidate package and append to results list.
+
+Return list of qualified candidate packages.
+
+Each candidate package is a dict:
+{
+  "ticker"          : str,
+  "catalyst_type"   : str,
+  "eass"            : dict (full EASS output),
+  "haiku_summary"   : str,
+  "outcome_profile" : dict (full ChromaDB output),
+  "metrics"         : dict (regime + individual metrics),
+}
+
+================================================================================
+PART 6: risk_auditor.py
+================================================================================
+
+Create risk_auditor.py implementing the Claude Sonnet structural audit and final output.
+
+Import: anthropic, json, datetime, os, config
+
+--- FUNCTION: async run_sonnet_audit(candidate: dict, client: anthropic.Anthropic) -> dict ---
+Build a structured prompt for Claude Sonnet containing:
+  - Ticker and catalyst type
+  - EASS score and signal quality
+  - Haiku 3-sentence summary
+  - ChromaDB outcome profile (confidence, sample size, expected value, win rates)
+  - Regime data (bullish/bearish, sector rank)
+  - Individual metrics (ATR, EMA alignment, pre-market gap, RVOL)
+
+System prompt:
+"You are a senior institutional risk analyst. Your job is to identify 
+structural threats that quantitative scores cannot detect. Analyze the 
+provided trade setup and identify: (1) any text-based red flags in the 
+news summary, (2) whether the catalyst is durable or one-time, 
+(3) whether the market regime supports continuation. 
+Output ONLY a JSON object with these exact keys:
+  threat_level: LOW | MEDIUM | HIGH
+  threats_identified: list of strings (empty list if none)
+  durability: DURABLE | ONE_TIME | UNCERTAIN
+  regime_support: CONFIRMED | NEUTRAL | AGAINST
+  entry_strategy: MARKET_OPEN | PULLBACK_LIMIT_21EMA | DO_NOT_ENTER
+  audit_note: one sentence summary"
+
+User message: JSON dump of full candidate dict.
+max_tokens = LLM_MAX_TOKENS
+
+Parse response as JSON. If parsing fails, return safe default:
+{
+  "threat_level"      : "HIGH",
+  "threats_identified": ["Audit parsing failed — manual review required"],
+  "durability"        : "UNCERTAIN",
+  "regime_support"    : "NEUTRAL",
+  "entry_strategy"    : "DO_NOT_ENTER",
+  "audit_note"        : "Automated audit failed. Do not trade without manual review."
+}
+
+--- FUNCTION: apply_regime_strategy_mutator(audit_result: dict, regime: str) -> dict ---
+If regime == "BEARISH":
+  If audit_result["entry_strategy"] == "MARKET_OPEN":
+    Mutate to "PULLBACK_LIMIT_21EMA"
+  Multiply any position size by BEARISH_REGIME_MUTATOR
+  Append "BEARISH REGIME: Position size reduced 50%, entry strategy downgraded." 
+  to threats_identified list.
+Return mutated audit_result.
+
+--- FUNCTION: calculate_position_size(account_size: float, stop_distance_pct: float, regime: str) -> dict ---
+risk_amount = account_size * STANDARD_ACCOUNT_RISK
+If regime == "BEARISH":
+  risk_amount *= BEARISH_REGIME_MUTATOR
+shares = risk_amount / (account_size * stop_distance_pct) if stop_distance_pct > 0 else 0
+Return:
+{
+  "risk_amount_dollars" : round(risk_amount, 2),
+  "stop_distance_pct"   : round(stop_distance_pct, 4),
+  "suggested_shares"    : int(shares),
+  "regime_applied"      : regime,
+}
+
+--- FUNCTION: format_strategy_card(candidate: dict, audit: dict, position: dict) -> str ---
+Format a Markdown strategy card string with these sections:
+
+## STRATEGY CARD — {ticker} — {datetime.now().strftime("%Y-%m-%d %H:%M EST")}
+
+### Catalyst
+- Type: {catalyst_type}
+- EASS Score: {eass_score} / 10.0
+- Signal Quality: {signal_quality}
+- Summary: {haiku_summary}
+
+### Historical Validation
+- Confidence: {confidence} ({sample_size} similar setups)
+- Win Rate Day 1 / Day 3: {win_rate_day1} / {win_rate_day3}
+- Expected Value per trade: {expected_value}
+- Average max adverse move: {avg_max_adverse}
+
+### Risk Audit
+- Threat Level: {threat_level}
+- Threats: {threats list or "None identified"}
+- Catalyst Durability: {durability}
+- Regime Support: {regime_support}
+- Audit Note: {audit_note}
+
+### Trade Parameters
+- Entry Strategy: {entry_strategy}
+- Suggested Stop: {suggested_stop}
+- Suggested Target: {suggested_target}
+- Risk Amount: ${risk_amount_dollars}
+- Suggested Shares: {suggested_shares}
+
+---
+
+--- FUNCTION: write_outputs(strategy_cards: list[str], log_entries: list[dict]) ---
+Write all strategy cards joined by "\n\n---\n\n" to STRATEGY_OUTPUT_PATH.
+Write log_entries as JSON array to LOG_QUEUE_PATH with indent=2.
+Print confirmation with count of cards written.
+
+================================================================================
+PART 7: scheduler.py
+================================================================================
+
+Create scheduler.py as the main production loop.
+
+Import: asyncio, schedule, time, datetime, pytz, anthropic, os
+Import: config, regime_engine, pipeline, risk_auditor, database
+Load environment variables from .env using python-dotenv.
+
+--- ASYNC FUNCTION: run_premarket_pipeline(db_client, anthropic_client) ---
+This function executes the full 9-gate pipeline at 8:05 AM EST.
+
+Print timestamped start message.
+Initialize log_entries = []
+
+STEP 1.1 — MACRO GATE:
+  regime_data = regime_engine.get_market_regime()
+  Log regime result.
+  If regime == "BEARISH": print warning but continue (bearish mutator applied later, not a hard stop)
+
+STEP 1.2 — SECTOR GATE:
+  sector_data = regime_engine.get_top_sectors()
+  top_sectors = sector_data["top_sectors"]
+  Log top sectors.
+
+For this prototype, define CANDIDATE_TICKERS as a hardcoded list at the top of scheduler.py.
+In production this would come from a live screener feed.
+Example: CANDIDATE_TICKERS = ["NVDA", "MSFT", "AAPL", "AMD", "META", "AMZN", "GOOGL", "TSLA"]
+
+STEP 1.2 filter:
+  sector_survivors = regime_engine.filter_by_sector(CANDIDATE_TICKERS, top_sectors)
+  Log how many tickers survived sector gate.
+  If empty: log "NO_SECTOR_SURVIVORS" and return.
+
+STEP 1.3 — VOLATILITY + TREND GATE:
+  individual_survivors = regime_engine.apply_individual_gates(sector_survivors)
+  Log survivors.
+  If empty: log "NO_INDIVIDUAL_GATE_SURVIVORS" and return.
+
+STEP 1.4 — EARNINGS PROXIMITY GATE:
+  earnings_survivors = regime_engine.apply_earnings_gate(individual_survivors)
+  Log survivors.
+  If empty: log "NO_EARNINGS_GATE_SURVIVORS" and return.
+
+STEP 1.5 — SECTOR LEADERSHIP GATE:
+  Add pre_market_gap_pct to each ticker's metrics dict using yfinance pre-market data.
+  leaders = regime_engine.apply_sector_leadership_gate(earnings_survivors)
+  Log final leaders count.
+  If empty: log "NO_LEADERS_IDENTIFIED" and return.
+
+STEP 1.6–1.7 — PAID PIPELINE (only survivors reach here):
+  Print "PAID API GATE REACHED — {len(leaders)} tickers qualifying"
+  candidates = await pipeline.run_pipeline(leaders, regime_data, db_client)
+  Log candidate count.
+  If empty: log "NO_CANDIDATES_AFTER_PIPELINE" and return.
+
+STEP — SONNET AUDIT:
+  strategy_cards = []
+  for candidate in candidates:
+    audit = await risk_auditor.run_sonnet_audit(candidate, anthropic_client)
+    audit = risk_auditor.apply_regime_strategy_mutator(audit, regime_data["regime"])
+    position = risk_auditor.calculate_position_size(
+        account_size      = 100_000,
+        stop_distance_pct = abs(candidate["outcome_profile"]["suggested_stop"] or 0.02),
+        regime            = regime_data["regime"]
+    )
+    card = risk_auditor.format_strategy_card(candidate, audit, position)
+    strategy_cards.append(card)
+
+  risk_auditor.write_outputs(strategy_cards, log_entries)
+  Print "PRE-MARKET PIPELINE COMPLETE"
+
+--- ASYNC FUNCTION: run_live_volume_check(db_client, anthropic_client) ---
+Executes at 9:45 AM EST.
+Load active_monitoring_queue.json.
+For each ticker in queue with status "ACTIVE":
+  Fetch 1-minute volume data for 9:30–9:45 AM window via yfinance.
+  Compute interval_rvol = actual_interval_volume / historical_mean_interval_volume.
+  If interval_rvol < INSTITUTIONAL_RVOL_FLOOR:
+    Mutate strategy card entry_strategy to "PULLBACK_LIMIT_21EMA"
+    Log: "RVOL_BELOW_FLOOR — institutional buying not confirmed — downgraded to PULLBACK_LIMIT"
+  Else:
+    Log: "RVOL_CONFIRMED — institutional buying active — strategy unchanged"
+Re-write updated queue to LOG_QUEUE_PATH.
+Re-write updated strategy cards to STRATEGY_OUTPUT_PATH.
+Print "LIVE VOLUME CHECK COMPLETE"
+
+--- MAIN EXECUTION BLOCK ---
+Initialize:
+  db_client        = database.initialize_database()
+  anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+Use schedule library to register:
+  schedule.every().day.at("08:05").do(lambda: asyncio.run(
+      run_premarket_pipeline(db_client, anthropic_client)))
+  schedule.every().day.at("09:45").do(lambda: asyncio.run(
+      run_live_volume_check(db_client, anthropic_client)))
+
+Print "Scheduler initialized. Waiting for market sessions..."
+Run schedule loop: while True: schedule.run_pending(); time.sleep(30)
+
+================================================================================
+PART 8: SUPPORTING FILES
+================================================================================
+
+--- Create earnings_calendar.csv ---
+Create with columns: ticker, next_earnings_date
+Populate with 10 example rows using realistic near-future dates.
+Format: YYYY-MM-DD
+
+--- Create requirements.txt ---
+anthropic
+yfinance
+pandas
+numpy
+chromadb
+aiohttp
+schedule
+python-dotenv
+pytz
+
+--- Create .env.example ---
+ANTHROPIC_API_KEY=your_anthropic_key_here
+POLYGON_API_KEY=your_polygon_key_here
+
+--- Create README.md ---
+Write a concise setup guide covering:
+1. pip install -r requirements.txt
+2. Copy .env.example to .env and fill in API keys
+3. Populate earnings_calendar.csv with real ticker dates
+4. Run: python scheduler.py
+5. Output locations: final_strategy_blueprint.md and active_monitoring_queue.json
+6. How to populate ChromaDB with historical setups via database.store_setup()
+7. Note on FUTURE_STUBs: whisper component and options component locations in pipeline.py
+
+================================================================================
+PART 9: EXECUTION VERIFICATION
+================================================================================
+
+After writing all files, perform the following verification steps:
+
+1. Run: python -c "import config; print('config OK')"
+2. Run: python -c "import database; db = database.initialize_database(); print('database OK')"
+3. Run: python -c "import regime_engine; print('regime_engine OK')"
+4. Run: python -c "import pipeline; print('pipeline OK')"
+5. Run: python -c "import risk_auditor; print('risk_auditor OK')"
+6. Run: python -c "import scheduler; print('scheduler OK')"
+
+If any import fails, fix the error before proceeding.
+Print a final summary listing every file created and its line count.
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
+```

@@ -1,0 +1,207 @@
+"""ChromaDB setup and hierarchical collections for Strategy Engine v5.1."""
+
+import chromadb
+import numpy as np
+import json
+import datetime
+import config
+
+
+def normalize(value, min_val, max_val):
+    """Clip-normalize value to [0.0, 1.0]."""
+    if max_val == min_val:
+        return 0.0
+    return float(np.clip((value - min_val) / (max_val - min_val), 0.0, 1.0))
+
+
+def initialize_database():
+    """Connect to ChromaDB and ensure all catalyst collections exist."""
+    client = chromadb.PersistentClient(path=config.VECTOR_DB_PATH)
+    for name in config.CATALYST_COLLECTIONS:
+        client.get_or_create_collection(name)
+    print(f"[DB] {len(config.CATALYST_COLLECTIONS)} collections ready at {config.VECTOR_DB_PATH}")
+    return client
+
+
+def build_regime_vector(regime_data: dict) -> list:
+    """Build an 8-dimensional normalized regime vector."""
+    spy_pct = regime_data.get("spy_pct_above_50sma", 0.0)
+    sector_5d = regime_data.get("sector_5d_vs_spy", 0.0)
+    vix = regime_data.get("vix_level", 20.0)
+    sector_rank = regime_data.get("sector_rank", 2.0)
+    pct_above_200 = regime_data.get("pct_above_200ema", 0.0)
+    gap_pct = regime_data.get("premarket_gap_pct", 0.015)
+    rvol = regime_data.get("rvol_945", 1.0)
+    quarter = regime_data.get("quarter", 1)
+
+    return [
+        normalize(spy_pct, -0.15, 0.15),
+        normalize(sector_5d, -0.05, 0.05),
+        1.0 - normalize(vix, 10, 45),          # inverted: lower VIX → higher score
+        1.0 - normalize(sector_rank, 1, 3),     # inverted: rank 1 → highest score
+        normalize(pct_above_200, 0, 0.30),
+        normalize(gap_pct, 0.015, 0.20),
+        normalize(rvol, 1.0, 15.0),
+        normalize(quarter, 1, 4),
+    ]
+
+
+def build_catalyst_vector(catalyst_data: dict, catalyst_type: str) -> list:
+    """Build a 4-dimensional normalized catalyst vector, branched by catalyst_type prefix."""
+    ct = catalyst_type.lower()
+
+    if ct.startswith("earnings") or ct.startswith("revenue"):
+        return [
+            normalize(catalyst_data.get("eps_surprise_pct", 0.0), -0.30, 0.50),
+            normalize(catalyst_data.get("revenue_surprise_pct", 0.0), -0.20, 0.30),
+            normalize(catalyst_data.get("guidance_delta_pct", 0.0), -0.20, 0.20),
+            normalize(catalyst_data.get("analyst_revision_count", 0), 0, 25),
+        ]
+
+    if ct.startswith("guidance"):
+        return [
+            normalize(catalyst_data.get("eps_guidance_delta_pct", 0.0), -0.30, 0.30),
+            normalize(catalyst_data.get("revenue_guidance_delta_pct", 0.0), -0.20, 0.20),
+            float(bool(catalyst_data.get("ceo_statement_positive", False))),
+            normalize(catalyst_data.get("days_to_next_earnings", 45), 6, 90),
+        ]
+
+    if ct.startswith("fda"):
+        return [
+            float(bool(catalyst_data.get("was_expected", False))),
+            float(bool(catalyst_data.get("has_competitor", False))),
+            normalize(catalyst_data.get("market_cap_billions", 1.0), 0.1, 50),
+            normalize(catalyst_data.get("pipeline_depth", 1), 1, 20),
+        ]
+
+    if ct.startswith("ma") or ct.startswith("buyback"):
+        return [
+            normalize(catalyst_data.get("premium_pct", 0.0), 0, 0.60),
+            float(bool(catalyst_data.get("cash_deal", False))),
+            normalize(catalyst_data.get("deal_size_billions", 1.0), 0.1, 100),
+            float(bool(catalyst_data.get("hostile_bid", False))),
+        ]
+
+    if ct.startswith("government") or ct.startswith("commercial"):
+        return [
+            normalize(catalyst_data.get("contract_value_millions", 10.0), 1, 5000),
+            float(bool(catalyst_data.get("multi_year", False))),
+            float(bool(catalyst_data.get("sole_source", False))),
+            normalize(catalyst_data.get("margin_impact_pct", 0.0), 0, 0.05),
+        ]
+
+    return [0.5, 0.5, 0.5, 0.5]
+
+
+def store_setup(client, catalyst_type: str, regime_data: dict, catalyst_data: dict, outcome: dict):
+    """Store a historical setup as a 12-dim vector in the appropriate collection."""
+    regime_vec = build_regime_vector(regime_data)
+    catalyst_vec = build_catalyst_vector(catalyst_data, catalyst_type)
+    full_vector = regime_vec + catalyst_vec
+
+    collection = client.get_or_create_collection(catalyst_type)
+
+    ticker = outcome.get("ticker", "UNKNOWN")
+    date_str = outcome.get("date", datetime.date.today().isoformat())
+    doc_id = f"{ticker}_{date_str}_{hash(str(full_vector)) % 1_000_000:06d}"
+
+    # Guard against None values — ChromaDB metadata must be scalar
+    metadata = {
+        "ticker": str(ticker),
+        "date": str(date_str),
+        "catalyst_type": str(catalyst_type),
+        "day1_return": float(outcome.get("day1_return") or 0.0),
+        "day3_return": float(outcome.get("day3_return") or 0.0),
+        "max_adverse_move": float(outcome.get("max_adverse_move") or 0.0),
+        "held_above_21ema": float(bool(outcome.get("held_above_21ema", False))),
+        "regime_at_exit": str(outcome.get("regime_at_exit") or "UNKNOWN"),
+        "exit_trigger": str(outcome.get("exit_trigger") or "UNKNOWN"),
+    }
+
+    collection.add(
+        embeddings=[full_vector],
+        ids=[doc_id],
+        metadatas=[metadata],
+    )
+
+
+def query_similar_setups(client, catalyst_type: str, regime_data: dict, catalyst_data: dict) -> dict:
+    """Query ChromaDB for similar historical setups and return an outcome profile."""
+    regime_vec = build_regime_vector(regime_data)
+    catalyst_vec = build_catalyst_vector(catalyst_data, catalyst_type)
+    query_vector = regime_vec + catalyst_vec
+
+    collection = client.get_or_create_collection(catalyst_type)
+    results = collection.query(
+        query_embeddings=[query_vector],
+        n_results=80,
+        include=["metadatas", "distances"],
+    )
+
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    filtered = [
+        m for m, d in zip(metadatas, distances)
+        if d < config.VECTOR_DB_MAX_DISTANCE
+    ]
+
+    return calculate_outcome_profile(filtered)
+
+
+def calculate_outcome_profile(matches: list) -> dict:
+    """Compute statistical outcome profile from a list of similar historical setups."""
+    if len(matches) < config.VECTOR_DB_MIN_SAMPLES:
+        return {
+            "confidence": "INSUFFICIENT",
+            "sample_size": len(matches),
+            "action": "SKIP_TRADE",
+            "reason": "Insufficient historical samples for reliable probability estimate.",
+            "win_rate_day1": None,
+            "win_rate_day3": None,
+            "expected_value": None,
+            "suggested_stop": None,
+            "suggested_target": None,
+        }
+
+    day1_returns = [float(m["day1_return"]) for m in matches]
+    day3_returns = [float(m["day3_return"]) for m in matches]
+    adverse_moves = [float(m["max_adverse_move"]) for m in matches]
+
+    winners_d3 = [r for r in day3_returns if r > 0]
+    losers_d3 = [r for r in day3_returns if r <= 0]
+
+    win_rate_d1 = float(np.mean([r > 0 for r in day1_returns]))
+    win_rate_d3 = float(np.mean([r > 0 for r in day3_returns]))
+    avg_gain = float(np.mean(winners_d3)) if winners_d3 else 0.0
+    avg_loss = float(abs(np.mean(losers_d3))) if losers_d3 else 0.0
+    loss_rate = 1.0 - win_rate_d3
+    expected_value = (win_rate_d3 * avg_gain) - (loss_rate * avg_loss)
+
+    n = len(matches)
+    # Note: n_results=80 in query_similar_setups means HIGH (>=150) is unreachable
+    # via the standard query path. Kept as-is per spec.
+    if n >= 150:
+        confidence = "HIGH"
+    elif n >= 80:
+        confidence = "MODERATE"
+    else:
+        confidence = "LOW"
+
+    held_vals = [float(m.get("held_above_21ema", 0.0)) for m in matches]
+
+    return {
+        "confidence": confidence,
+        "sample_size": n,
+        "action": "PROCEED" if expected_value > 0 else "SKIP_TRADE",
+        "win_rate_day1": round(win_rate_d1, 4),
+        "win_rate_day3": round(win_rate_d3, 4),
+        "avg_gain_winners": round(avg_gain, 4),
+        "avg_loss_losers": round(avg_loss, 4),
+        "expected_value": round(expected_value, 4),
+        "avg_max_adverse": round(float(np.mean(adverse_moves)), 4),
+        "adverse_95pct": round(float(np.percentile(adverse_moves, 95)), 4),
+        "pct_held_above_21ema": round(float(np.mean(held_vals)), 4),
+        "suggested_stop": round(-float(np.percentile(adverse_moves, 75)), 4),
+        "suggested_target": round(float(np.mean(winners_d3)), 4) if winners_d3 else None,
+    }
