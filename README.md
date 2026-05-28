@@ -1,4 +1,4 @@
-# Strategy Engine v5.1
+# AlphaCrew
 
 A production-ready Python quantitative trading strategy suggestion engine that screens pre-market catalysts through a 9-gate pipeline and produces formatted trade setup cards.
 
