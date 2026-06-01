@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import os
 import anthropic
+import yfinance as yf
 from dotenv import load_dotenv
 
 import config
@@ -67,7 +68,6 @@ def build_regime_data(regime_override: str) -> dict:
 
 def _get_premarket_gap(ticker: str) -> float:
     """Estimate pre-market gap from yfinance pre/post market data."""
-    import yfinance as yf
     try:
         t = yf.Ticker(ticker)
         info = t.info
@@ -149,7 +149,10 @@ async def main(argv=None) -> None:
         return
 
     # Sonnet audit + strategy cards
-    anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY is not set in environment")
+    anthropic_client = anthropic.Anthropic(api_key=api_key)
     strategy_cards = []
     for candidate in candidates:
         audit = await risk_auditor.run_sonnet_audit(candidate, anthropic_client)

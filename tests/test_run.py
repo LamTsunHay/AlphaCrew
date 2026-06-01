@@ -1,5 +1,6 @@
 """Tests for run.py — arg parsing, ticker defaults, regime override."""
 
+import asyncio
 import os
 import sys
 import pytest
@@ -68,7 +69,6 @@ def test_main_regime_override_skips_live_spy(monkeypatch):
     monkeypatch.setattr("regime_engine.get_top_sectors", lambda: {"top_sectors": []})
     monkeypatch.setattr("regime_engine.filter_by_sector", lambda tickers, sectors: [])
     monkeypatch.setattr("notifier.print_to_terminal", lambda cards, log: None)
-    import asyncio
     asyncio.run(run.main(["NVDA", "--regime", "BULLISH"]))
     assert calls == [], "get_market_regime() must not be called when --regime is provided"
 
@@ -83,6 +83,5 @@ def test_main_no_regime_calls_live_spy(monkeypatch):
     monkeypatch.setattr("regime_engine.get_top_sectors", lambda: {"top_sectors": []})
     monkeypatch.setattr("regime_engine.filter_by_sector", lambda tickers, sectors: [])
     monkeypatch.setattr("notifier.print_to_terminal", lambda cards, log: None)
-    import asyncio
     asyncio.run(run.main(["NVDA"]))
     assert calls == [1], "get_market_regime() must be called when no --regime override"
