@@ -1,3 +1,11 @@
+# Project runtime outputs
+chroma_db/
+final_strategy_blueprint.md
+active_monitoring_queue.json
+
+# Claude Code IDE config
+.claude/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
