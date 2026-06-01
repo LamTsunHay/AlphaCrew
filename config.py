@@ -12,6 +12,13 @@ LLM_STAGE_3_FAST = "claude-haiku-4-5-20251001"
 LLM_STAGE_4_PREMIUM = "claude-sonnet-4-6"
 LLM_MAX_TOKENS = 1000
 
+# Testing mode — set True to route both LLM stages to Groq (free tier)
+TESTING_MODE        = False
+GROQ_API_KEY        = ""   # set in .env as GROQ_API_KEY
+GROQ_BASE_URL       = "https://api.groq.com/openai/v1"
+GROQ_STAGE_3_MODEL  = "llama-3.1-8b-instant"     # replaces Haiku
+GROQ_STAGE_4_MODEL  = "llama-3.3-70b-versatile"  # replaces Sonnet
+
 # Regime Filter
 REGIME_INDICATOR = "SPY"
 REGIME_SMA_PERIOD = 50
