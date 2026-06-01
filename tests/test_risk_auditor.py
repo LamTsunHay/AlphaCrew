@@ -136,19 +136,19 @@ def test_write_outputs_creates_files():
 
 @pytest.mark.asyncio
 async def test_sonnet_audit_fallback_on_bad_json():
-    """If Sonnet returns non-JSON, safe default is returned."""
+    """If the LLM returns non-JSON, safe default is returned."""
     mock_client = MagicMock()
     mock_msg = MagicMock()
     mock_msg.content = [MagicMock(text="Not valid JSON at all")]
     mock_client.messages.create.return_value = mock_msg
 
-    result = await risk_auditor.run_sonnet_audit({"ticker": "X"}, mock_client)
+    result = await risk_auditor.run_sonnet_audit({"ticker": "X"}, mock_client, "anthropic")
     assert result["entry_strategy"] == "DO_NOT_ENTER"
     assert result["threat_level"] == "HIGH"
 
 @pytest.mark.asyncio
 async def test_sonnet_audit_valid_json():
-    """If Sonnet returns valid JSON, it is parsed and returned."""
+    """If the LLM returns valid JSON, it is parsed and returned."""
     valid = {
         "threat_level": "LOW",
         "threats_identified": [],
@@ -162,6 +162,6 @@ async def test_sonnet_audit_valid_json():
     mock_msg.content = [MagicMock(text=json.dumps(valid))]
     mock_client.messages.create.return_value = mock_msg
 
-    result = await risk_auditor.run_sonnet_audit({"ticker": "X"}, mock_client)
+    result = await risk_auditor.run_sonnet_audit({"ticker": "X"}, mock_client, "anthropic")
     assert result["entry_strategy"] == "MARKET_OPEN"
     assert result["threat_level"] == "LOW"
