@@ -144,8 +144,10 @@ def test_eass_no_eps_no_guidance_mixed_signal():
 
 @pytest.mark.asyncio
 async def test_run_pipeline_no_articles_skipped():
-    """Tickers with no Polygon articles are skipped with NO_CATALYST_FOUND."""
-    with patch("pipeline.fetch_polygon_news", new_callable=AsyncMock, return_value=[]):
+    """Tickers with no news articles are skipped with NO_CATALYST_FOUND."""
+    mock_client = MagicMock()
+    with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[]), \
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
@@ -158,7 +160,9 @@ async def test_run_pipeline_no_articles_skipped():
 async def test_run_pipeline_market_mover_skipped():
     """Tickers classified as market_movers are skipped with LOW_WEIGHT_CATALYST."""
     article = {"title": "Stock surges on heavy volume", "description": ""}
-    with patch("pipeline.fetch_polygon_news", new_callable=AsyncMock, return_value=[article]):
+    mock_client = MagicMock()
+    with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
@@ -171,7 +175,9 @@ async def test_run_pipeline_market_mover_skipped():
 async def test_run_pipeline_low_eass_skipped():
     """Tickers with EASS < 2.0 are skipped."""
     article = {"title": "Company earns $1.00 vs $1.00 expected", "description": ""}
-    with patch("pipeline.fetch_polygon_news", new_callable=AsyncMock, return_value=[article]):
+    mock_client = MagicMock()
+    with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},

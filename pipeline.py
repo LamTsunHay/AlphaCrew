@@ -6,7 +6,7 @@ gates in regime_engine have passed.
 
 import aiohttp
 import asyncio
-import anthropic
+import llm_client
 import json
 import re
 import datetime
@@ -246,20 +246,20 @@ def calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict:
     }
 
 
-async def summarize_news_haiku(raw_text: str, ticker: str, client: anthropic.Anthropic) -> str:
-    """Summarize news catalyst in 3 sentences using Claude Haiku (Stage 3)."""
-    message = client.messages.create(
-        model=config.LLM_STAGE_3_FAST,
-        max_tokens=config.LLM_MAX_TOKENS,
-        system=(
+async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str) -> str:
+    """Summarize news catalyst in 3 sentences using Stage 3 LLM (Haiku or Groq equivalent)."""
+    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+    return llm_client.chat(
+        client,
+        provider,
+        model,
+        (
             "You are a financial analyst. Summarize the key catalyst facts in exactly 3 sentences. "
             "Include: what happened, the numerical magnitude, and the forward implication. Be factual only."
         ),
-        messages=[
-            {"role": "user", "content": f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}"}
-        ],
+        f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}",
+        config.LLM_MAX_TOKENS,
     )
-    return message.content[0].text
 
 
 async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client) -> list:
@@ -272,7 +272,7 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
     log_entries = []
 
     async with aiohttp.ClientSession() as session:
-        anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        client, provider = llm_client.create_client()
 
         for entry in tickers_with_metrics:
             ticker = entry["ticker"]
@@ -313,7 +313,7 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
 
             # Step 8: Haiku summarization
             haiku_summary = await summarize_news_haiku(
-                eass_inputs["raw_text_combined"], ticker, anthropic_client
+                eass_inputs["raw_text_combined"], ticker, client, provider
             )
 
             # Step 9: Build catalyst_data dict for ChromaDB vector
