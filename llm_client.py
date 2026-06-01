@@ -15,6 +15,7 @@ def create_client():
     API keys are read from environment first, then fall back to config values.
     """
     if config.TESTING_MODE:
+        # Lazy import: avoids loading openai SDK when testing mode is inactive
         from openai import OpenAI
         api_key = os.environ.get("GROQ_API_KEY", config.GROQ_API_KEY)
         client = OpenAI(base_url=config.GROQ_BASE_URL, api_key=api_key)
