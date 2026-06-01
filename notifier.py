@@ -12,7 +12,7 @@ def print_to_terminal(strategy_cards: list, log_entries: list) -> None:
     if gate_steps:
         print("\n--- Gate Summary ---")
         for entry in gate_steps:
-            print(f"  {entry['step']}: {entry.get('result', entry)}")
+            print(f"  {entry['step']}: {entry.get('result', 'N/A')}")
 
     # Strategy cards
     print(f"\n--- Strategy Cards ({len(strategy_cards)} qualified) ---\n")
