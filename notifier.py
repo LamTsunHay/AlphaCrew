@@ -27,11 +27,7 @@ def print_to_terminal(strategy_cards: list, log_entries: list) -> None:
 
 
 def send_telegram(strategy_cards: list, log_entries: list) -> None:
-    """FUTURE_STUB: Send strategy cards to a Telegram channel via bot.
-
-    To activate:
-      1. pip install python-telegram-bot
-      2. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID to .env
-      3. Implement this function using telegram.Bot.send_message()
-    """
+    """FUTURE_STUB: Send strategy cards to a Telegram channel via bot."""
+    # To activate: pip install python-telegram-bot, add TELEGRAM_BOT_TOKEN
+    # and TELEGRAM_CHANNEL_ID to .env, then implement with telegram.Bot.send_message()
     pass
