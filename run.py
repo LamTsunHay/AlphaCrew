@@ -2,8 +2,7 @@
 
 import argparse
 import asyncio
-import os
-import anthropic
+import llm_client
 import yfinance as yf
 from dotenv import load_dotenv
 
@@ -149,13 +148,10 @@ async def main(argv=None) -> None:
         return
 
     # Sonnet audit + strategy cards
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY is not set in environment")
-    anthropic_client = anthropic.Anthropic(api_key=api_key)
+    client, provider = llm_client.create_client()
     strategy_cards = []
     for candidate in candidates:
-        audit = await risk_auditor.run_sonnet_audit(candidate, anthropic_client)
+        audit = await risk_auditor.run_sonnet_audit(candidate, client, provider)
         audit = risk_auditor.apply_regime_strategy_mutator(audit, regime_data["regime"])
         stop_dist = abs(candidate["outcome_profile"].get("suggested_stop") or 0.02)
         position = risk_auditor.calculate_position_size(

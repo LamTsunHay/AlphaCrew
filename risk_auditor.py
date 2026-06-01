@@ -1,6 +1,6 @@
 """Claude Sonnet structural audit and final strategy card output."""
 
-import anthropic
+import llm_client
 import json
 import re
 import datetime
@@ -17,8 +17,8 @@ _AUDIT_SAFE_DEFAULT = {
 }
 
 
-async def run_sonnet_audit(candidate: dict, client: anthropic.Anthropic) -> dict:
-    """Run Claude Sonnet structural risk audit on a qualified candidate."""
+async def run_sonnet_audit(candidate: dict, client, provider: str) -> dict:
+    """Run structural risk audit on a qualified candidate using Stage 4 LLM (Sonnet or Groq equivalent)."""
     system_prompt = (
         "You are a senior institutional risk analyst. Your job is to identify "
         "structural threats that quantitative scores cannot detect. Analyze the "
@@ -33,17 +33,18 @@ async def run_sonnet_audit(candidate: dict, client: anthropic.Anthropic) -> dict
         "  entry_strategy: MARKET_OPEN | PULLBACK_LIMIT_21EMA | DO_NOT_ENTER\n"
         "  audit_note: one sentence summary"
     )
+    model = config.GROQ_STAGE_4_MODEL if provider == "groq" else config.LLM_STAGE_4_PREMIUM
 
     try:
-        message = client.messages.create(
-            model=config.LLM_STAGE_4_PREMIUM,
-            max_tokens=config.LLM_MAX_TOKENS,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": json.dumps(candidate, default=str)}
-            ],
+        raw = llm_client.chat(
+            client,
+            provider,
+            model,
+            system_prompt,
+            json.dumps(candidate, default=str),
+            config.LLM_MAX_TOKENS,
         )
-        raw = message.content[0].text.strip()
+        raw = raw.strip()
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)

@@ -6,7 +6,7 @@ gates in regime_engine have passed.
 
 import aiohttp
 import asyncio
-import anthropic
+import llm_client
 import json
 import re
 import datetime
@@ -43,6 +43,47 @@ async def fetch_polygon_news(ticker: str, session: aiohttp.ClientSession) -> lis
     except Exception as exc:
         print(f"[PIPELINE] Polygon fetch error for {ticker}: {exc}")
         return []
+
+
+async def fetch_finnhub_news(ticker: str, session: aiohttp.ClientSession) -> list:
+    """Fetch recent news articles from Finnhub for a ticker using a 3-day lookback."""
+    today = datetime.date.today()
+    from_date = (today - datetime.timedelta(days=3)).isoformat()
+    to_date = today.isoformat()
+    url = config.FINNHUB_NEWS_URL
+    params = {
+        "symbol": ticker,
+        "from": from_date,
+        "to": to_date,
+        "token": os.environ.get("FINNHUB_API_KEY", config.FINNHUB_API_KEY),
+    }
+    try:
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            resp.raise_for_status()
+            articles = await resp.json()
+            return [
+                {
+                    "title": a.get("headline", ""),
+                    "description": a.get("summary", ""),
+                    "published_utc": datetime.datetime.utcfromtimestamp(a["datetime"]).isoformat() if a.get("datetime") else "",
+                    "keywords": [],
+                    "tickers": [a.get("related", "")] if a.get("related") else [],
+                }
+                for a in articles
+            ]
+    except Exception as exc:
+        print(f"[PIPELINE] Finnhub fetch error for {ticker}: {exc}")
+        return []
+
+
+async def fetch_news(ticker: str, session: aiohttp.ClientSession) -> list:
+    """Dispatch news fetch to the configured provider (polygon or finnhub)."""
+    if config.NEWS_PROVIDER == "polygon":
+        return await fetch_polygon_news(ticker, session)
+    elif config.NEWS_PROVIDER == "finnhub":
+        return await fetch_finnhub_news(ticker, session)
+    else:
+        raise ValueError(f"Unknown NEWS_PROVIDER: {config.NEWS_PROVIDER!r}. Use 'polygon' or 'finnhub'.")
 
 
 def classify_catalyst_type(article: dict) -> str:
@@ -205,20 +246,20 @@ def calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict:
     }
 
 
-async def summarize_news_haiku(raw_text: str, ticker: str, client: anthropic.Anthropic) -> str:
-    """Summarize news catalyst in 3 sentences using Claude Haiku (Stage 3)."""
-    message = client.messages.create(
-        model=config.LLM_STAGE_3_FAST,
-        max_tokens=config.LLM_MAX_TOKENS,
-        system=(
+async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str) -> str:
+    """Summarize news catalyst in 3 sentences using Stage 3 LLM (Haiku or Groq equivalent)."""
+    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+    return llm_client.chat(
+        client,
+        provider,
+        model,
+        (
             "You are a financial analyst. Summarize the key catalyst facts in exactly 3 sentences. "
             "Include: what happened, the numerical magnitude, and the forward implication. Be factual only."
         ),
-        messages=[
-            {"role": "user", "content": f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}"}
-        ],
+        f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}",
+        config.LLM_MAX_TOKENS,
     )
-    return message.content[0].text
 
 
 async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client) -> list:
@@ -231,13 +272,13 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
     log_entries = []
 
     async with aiohttp.ClientSession() as session:
-        anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        client, provider = llm_client.create_client()
 
         for entry in tickers_with_metrics:
             ticker = entry["ticker"]
 
-            # Step 1: Fetch Polygon news
-            articles = await fetch_polygon_news(ticker, session)
+            # Step 1: Fetch news via configured provider
+            articles = await fetch_news(ticker, session)
 
             # Step 2: No articles → skip
             if not articles:
@@ -272,7 +313,7 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
 
             # Step 8: Haiku summarization
             haiku_summary = await summarize_news_haiku(
-                eass_inputs["raw_text_combined"], ticker, anthropic_client
+                eass_inputs["raw_text_combined"], ticker, client, provider
             )
 
             # Step 9: Build catalyst_data dict for ChromaDB vector

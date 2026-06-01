@@ -7,7 +7,7 @@ import json
 import datetime
 import pytz
 import yfinance as yf
-import anthropic
+import llm_client
 import os
 from dotenv import load_dotenv
 
@@ -46,9 +46,11 @@ def _get_premarket_gap(ticker: str) -> float:
     return 0.0
 
 
-async def run_premarket_pipeline(db_client, anthropic_client):
+async def run_premarket_pipeline(db_client):
     """Full 9-gate pre-market pipeline. Runs at 8:05 AM EST."""
     print(f"\n[SCHEDULER] Pre-market pipeline started — {datetime.datetime.now()}")
+    client, provider = llm_client.create_client()
+    print(f"[SCHEDULER] LLM provider: {provider}")
     log_entries = []
     strategy_cards = []
 
@@ -125,7 +127,7 @@ async def run_premarket_pipeline(db_client, anthropic_client):
     # STEP — SONNET AUDIT + OUTPUT
     monitoring_queue = []
     for i, candidate in enumerate(candidates):
-        audit = await risk_auditor.run_sonnet_audit(candidate, anthropic_client)
+        audit = await risk_auditor.run_sonnet_audit(candidate, client, provider)
         audit = risk_auditor.apply_regime_strategy_mutator(audit, regime_data["regime"])
 
         stop_dist = abs(candidate["outcome_profile"].get("suggested_stop") or 0.02)
@@ -154,7 +156,7 @@ async def run_premarket_pipeline(db_client, anthropic_client):
     print("[SCHEDULER] PRE-MARKET PIPELINE COMPLETE")
 
 
-async def run_live_volume_check(db_client, anthropic_client):
+async def run_live_volume_check(db_client):
     """9:45 AM live RVOL confirmation gate."""
     print(f"\n[SCHEDULER] Live volume check started — {datetime.datetime.now()}")
 
@@ -226,13 +228,12 @@ if __name__ == "__main__":
     import pandas as pd  # needed inside run_live_volume_check
 
     db_client = database.initialize_database()
-    anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
     schedule.every().day.at("08:05").do(
-        lambda: asyncio.run(run_premarket_pipeline(db_client, anthropic_client))
+        lambda: asyncio.run(run_premarket_pipeline(db_client))
     )
     schedule.every().day.at("09:45").do(
-        lambda: asyncio.run(run_live_volume_check(db_client, anthropic_client))
+        lambda: asyncio.run(run_live_volume_check(db_client))
     )
 
     print("Scheduler initialized. Waiting for market sessions...")
