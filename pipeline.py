@@ -45,6 +45,47 @@ async def fetch_polygon_news(ticker: str, session: aiohttp.ClientSession) -> lis
         return []
 
 
+async def fetch_finnhub_news(ticker: str, session: aiohttp.ClientSession) -> list:
+    """Fetch recent news articles from Finnhub for a ticker using a 3-day lookback."""
+    today = datetime.date.today()
+    from_date = (today - datetime.timedelta(days=3)).isoformat()
+    to_date = today.isoformat()
+    url = config.FINNHUB_NEWS_URL
+    params = {
+        "symbol": ticker,
+        "from": from_date,
+        "to": to_date,
+        "token": os.environ.get("FINNHUB_API_KEY", config.FINNHUB_API_KEY),
+    }
+    try:
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            resp.raise_for_status()
+            articles = await resp.json()
+            return [
+                {
+                    "title": a.get("headline", ""),
+                    "description": a.get("summary", ""),
+                    "published_utc": datetime.datetime.utcfromtimestamp(a["datetime"]).isoformat() if a.get("datetime") else "",
+                    "keywords": [],
+                    "tickers": [a.get("related", "")] if a.get("related") else [],
+                }
+                for a in articles
+            ]
+    except Exception as exc:
+        print(f"[PIPELINE] Finnhub fetch error for {ticker}: {exc}")
+        return []
+
+
+async def fetch_news(ticker: str, session: aiohttp.ClientSession) -> list:
+    """Dispatch news fetch to the configured provider (polygon or finnhub)."""
+    if config.NEWS_PROVIDER == "polygon":
+        return await fetch_polygon_news(ticker, session)
+    elif config.NEWS_PROVIDER == "finnhub":
+        return await fetch_finnhub_news(ticker, session)
+    else:
+        raise ValueError(f"Unknown NEWS_PROVIDER: {config.NEWS_PROVIDER!r}. Use 'polygon' or 'finnhub'.")
+
+
 def classify_catalyst_type(article: dict) -> str:
     """Classify the dominant catalyst type from an article using keyword priority order."""
     text = (article.get("title", "") + " " + article.get("description", "")).lower()
@@ -236,8 +277,8 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
         for entry in tickers_with_metrics:
             ticker = entry["ticker"]
 
-            # Step 1: Fetch Polygon news
-            articles = await fetch_polygon_news(ticker, session)
+            # Step 1: Fetch news via configured provider
+            articles = await fetch_news(ticker, session)
 
             # Step 2: No articles → skip
             if not articles:

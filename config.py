@@ -76,6 +76,11 @@ CATALYST_COLLECTIONS = [
     "commercial_contract",
 ]
 
+# News provider — "polygon" or "finnhub"
+NEWS_PROVIDER = "finnhub"
+FINNHUB_API_KEY = ""  # set in .env as FINNHUB_API_KEY
+FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/company-news"
+
 # Sector ETF universe for rotation filter
 SECTOR_ETFS = {
     "XLK": "Technology",

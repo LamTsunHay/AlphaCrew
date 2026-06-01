@@ -68,6 +68,7 @@ Six-module system with a strict cost-minimization principle: **all free data gat
 - If ChromaDB returns fewer than 40 similar samples, output `INSUFFICIENT_CONFIDENCE` and skip the trade.
 - EASS uses 3 components only: `analyst_surprise` (weight 0.45), `whisper_surprise` (weight 0.00, FUTURE_STUB), `guidance_delta` (weight 0.55).
 - In BEARISH regime: position size is halved (`BEARISH_REGIME_MUTATOR = 0.5`) and `MARKET_OPEN` entry is downgraded to `PULLBACK_LIMIT_21EMA`.
+Add meaningful comment for every new functions added
 
 ## Data Conventions
 
