@@ -58,3 +58,31 @@ def test_nasdaq_100_has_expected_tickers():
     assert "MSFT" in run.NASDAQ_100
     assert "NVDA" in run.NASDAQ_100
     assert len(run.NASDAQ_100) >= 100
+
+
+def test_main_regime_override_skips_live_spy(monkeypatch):
+    """When --regime is given, regime_engine.get_market_regime is NOT called."""
+    calls = []
+    monkeypatch.setattr("regime_engine.get_market_regime", lambda: calls.append(1) or {})
+    # Patch all downstream calls so main() exits early without network calls
+    monkeypatch.setattr("regime_engine.get_top_sectors", lambda: {"top_sectors": []})
+    monkeypatch.setattr("regime_engine.filter_by_sector", lambda tickers, sectors: [])
+    monkeypatch.setattr("notifier.print_to_terminal", lambda cards, log: None)
+    import asyncio
+    asyncio.run(run.main(["NVDA", "--regime", "BULLISH"]))
+    assert calls == [], "get_market_regime() must not be called when --regime is provided"
+
+
+def test_main_no_regime_calls_live_spy(monkeypatch):
+    """When --regime is not given, regime_engine.get_market_regime IS called."""
+    calls = []
+    monkeypatch.setattr(
+        "regime_engine.get_market_regime",
+        lambda: calls.append(1) or {"regime": "BULLISH", "spy_close": 0.0, "spy_sma50": 0.0, "pct_above_50sma": 0.0},
+    )
+    monkeypatch.setattr("regime_engine.get_top_sectors", lambda: {"top_sectors": []})
+    monkeypatch.setattr("regime_engine.filter_by_sector", lambda tickers, sectors: [])
+    monkeypatch.setattr("notifier.print_to_terminal", lambda cards, log: None)
+    import asyncio
+    asyncio.run(run.main(["NVDA"]))
+    assert calls == [1], "get_market_regime() must be called when no --regime override"
