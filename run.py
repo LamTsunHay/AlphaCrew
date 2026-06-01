@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import llm_client
 import yfinance as yf
 from dotenv import load_dotenv
@@ -126,9 +127,12 @@ async def main(argv=None) -> None:
         notifier.print_to_terminal([], log_entries)
         return
 
-    # Sector leadership gate
-    for entry in earnings_survivors:
-        entry["pre_market_gap_pct"] = _get_premarket_gap(entry["ticker"])
+    # Sector leadership gate — fetch gaps in parallel to avoid sequential HTTP stalls
+    tickers_for_gap = [e["ticker"] for e in earnings_survivors]
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        gap_values = list(executor.map(_get_premarket_gap, tickers_for_gap))
+    for entry, gap in zip(earnings_survivors, gap_values):
+        entry["pre_market_gap_pct"] = gap
 
     leaders = regime_engine.apply_sector_leadership_gate(earnings_survivors)
     log_entries.append({"step": "LEADERSHIP_GATE", "leaders": [e["ticker"] for e in leaders]})

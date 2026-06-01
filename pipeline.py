@@ -262,110 +262,105 @@ async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str
     )
 
 
+async def _process_ticker(entry: dict, regime_data: dict, db_client, session: aiohttp.ClientSession,
+                          client, provider: str, semaphore: asyncio.Semaphore) -> dict | None:
+    """Process a single ticker through the full paid pipeline.
+
+    Returns a qualified candidate dict or None if the ticker is filtered at any step.
+    """
+    async with semaphore:
+        ticker = entry["ticker"]
+
+        # Step 1: Fetch news via configured provider
+        articles = await fetch_news(ticker, session)
+
+        # Step 2: No articles → skip
+        if not articles:
+            print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
+            return None
+
+        # Step 3: Classify catalyst type from top article
+        catalyst_type = classify_catalyst_type(articles[0])
+
+        # Step 4: Low-weight catalyst → skip
+        if catalyst_type == "market_movers":
+            print(f"[PIPELINE] {ticker}: LOW_WEIGHT_CATALYST")
+            return None
+
+        # Step 5: Extract EASS inputs
+        eass_inputs = extract_eass_inputs(articles, ticker)
+
+        # Step 6: Calculate EASS
+        eass = calculate_eass(eass_inputs, catalyst_type)
+
+        # Step 7: EASS below threshold → skip
+        if eass["eass_score"] < 2.0:
+            print(f"[PIPELINE] {ticker}: EASS_BELOW_THRESHOLD ({eass['eass_score']})")
+            return None
+
+        # Step 8: Haiku summarization
+        haiku_summary = await summarize_news_haiku(
+            eass_inputs["raw_text_combined"], ticker, client, provider
+        )
+
+        # Step 9: Build catalyst_data dict for ChromaDB vector
+        catalyst_data = {
+            "eps_surprise_pct": (
+                (eass_inputs["actual_eps"] - eass_inputs["consensus_eps"])
+                / abs(eass_inputs["consensus_eps"])
+            ) if eass_inputs["actual_eps"] and eass_inputs["consensus_eps"] else 0.0,
+            "revenue_surprise_pct": (
+                (eass_inputs["actual_revenue"] - eass_inputs["consensus_revenue"])
+                / abs(eass_inputs["consensus_revenue"])
+            ) if eass_inputs["actual_revenue"] and eass_inputs["consensus_revenue"] else 0.0,
+            "guidance_delta_pct": eass_inputs.get("guidance_delta_pct", 0.0),
+            "analyst_revision_count": 0,
+            "ceo_statement_positive": eass_inputs.get("ceo_statement_positive", False),
+        }
+
+        # Enrich regime_data with per-ticker metrics
+        enriched_regime = {**regime_data}
+        enriched_regime["premarket_gap_pct"] = entry.get("pre_market_gap_pct", 0.015)
+        enriched_regime["rvol_945"] = entry.get("rvol_945", 1.0)
+        enriched_regime["pct_above_200ema"] = (
+            (entry["price"] - entry["ema200"]) / entry["ema200"]
+            if entry.get("ema200") else 0.0
+        )
+
+        # Step 10: Query ChromaDB
+        outcome_profile = database.query_similar_setups(
+            db_client, catalyst_type, enriched_regime, catalyst_data
+        )
+
+        # Step 11: Insufficient confidence → skip
+        if outcome_profile.get("action") == "SKIP_TRADE":
+            print(f"[PIPELINE] {ticker}: SKIP_TRADE ({outcome_profile.get('confidence')})")
+            return None
+
+        print(f"[PIPELINE] {ticker}: QUALIFIED (EASS={eass['eass_score']}, {catalyst_type})")
+        return {
+            "ticker": ticker,
+            "catalyst_type": catalyst_type,
+            "eass": eass,
+            "haiku_summary": haiku_summary,
+            "outcome_profile": outcome_profile,
+            "metrics": {**entry, **enriched_regime},
+        }
+
+
 async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client) -> list:
     """Main pipeline coordinator. Only called after all free gates have passed.
 
-    For each ticker: fetch Polygon news → classify → EASS → Haiku summary →
-    ChromaDB similarity query. Returns list of qualified candidate packages.
+    Processes all tickers concurrently (up to 5 at a time) using asyncio.gather
+    to avoid paying sequential latency for Polygon fetches and LLM calls.
     """
-    candidates = []
-    log_entries = []
-
+    semaphore = asyncio.Semaphore(5)
     async with aiohttp.ClientSession() as session:
         client, provider = llm_client.create_client()
+        tasks = [
+            _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore)
+            for entry in tickers_with_metrics
+        ]
+        results = await asyncio.gather(*tasks)
 
-        for entry in tickers_with_metrics:
-            ticker = entry["ticker"]
-
-            # Step 1: Fetch news via configured provider
-            articles = await fetch_news(ticker, session)
-
-            # Step 2: No articles → skip
-            if not articles:
-                log_entries.append({"ticker": ticker, "status": "NO_CATALYST_FOUND"})
-                print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
-                continue
-
-            # Step 3: Classify catalyst type from top article
-            catalyst_type = classify_catalyst_type(articles[0])
-
-            # Step 4: Low-weight catalyst → skip
-            if catalyst_type == "market_movers":
-                log_entries.append({"ticker": ticker, "status": "LOW_WEIGHT_CATALYST"})
-                print(f"[PIPELINE] {ticker}: LOW_WEIGHT_CATALYST")
-                continue
-
-            # Step 5: Extract EASS inputs
-            eass_inputs = extract_eass_inputs(articles, ticker)
-
-            # Step 6: Calculate EASS
-            eass = calculate_eass(eass_inputs, catalyst_type)
-
-            # Step 7: EASS below threshold → skip
-            if eass["eass_score"] < 2.0:
-                log_entries.append({
-                    "ticker": ticker,
-                    "status": "EASS_BELOW_THRESHOLD",
-                    "eass_score": eass["eass_score"],
-                })
-                print(f"[PIPELINE] {ticker}: EASS_BELOW_THRESHOLD ({eass['eass_score']})")
-                continue
-
-            # Step 8: Haiku summarization
-            haiku_summary = await summarize_news_haiku(
-                eass_inputs["raw_text_combined"], ticker, client, provider
-            )
-
-            # Step 9: Build catalyst_data dict for ChromaDB vector
-            catalyst_data = {
-                "eps_surprise_pct": (
-                    (eass_inputs["actual_eps"] - eass_inputs["consensus_eps"])
-                    / abs(eass_inputs["consensus_eps"])
-                ) if eass_inputs["actual_eps"] and eass_inputs["consensus_eps"] else 0.0,
-                "revenue_surprise_pct": (
-                    (eass_inputs["actual_revenue"] - eass_inputs["consensus_revenue"])
-                    / abs(eass_inputs["consensus_revenue"])
-                ) if eass_inputs["actual_revenue"] and eass_inputs["consensus_revenue"] else 0.0,
-                "guidance_delta_pct": eass_inputs.get("guidance_delta_pct", 0.0),
-                "analyst_revision_count": 0,
-                "ceo_statement_positive": eass_inputs.get("ceo_statement_positive", False),
-            }
-
-            # Enrich regime_data with per-ticker metrics
-            enriched_regime = {**regime_data}
-            enriched_regime["premarket_gap_pct"] = entry.get("pre_market_gap_pct", 0.015)
-            enriched_regime["rvol_945"] = entry.get("rvol_945", 1.0)
-            enriched_regime["pct_above_200ema"] = (
-                (entry["price"] - entry["ema200"]) / entry["ema200"]
-                if entry.get("ema200") else 0.0
-            )
-
-            # Step 10: Query ChromaDB
-            outcome_profile = database.query_similar_setups(
-                db_client, catalyst_type, enriched_regime, catalyst_data
-            )
-
-            # Step 11: Insufficient confidence → skip
-            if outcome_profile.get("action") == "SKIP_TRADE":
-                log_entries.append({
-                    "ticker": ticker,
-                    "status": "SKIP_TRADE",
-                    "reason": outcome_profile.get("reason", outcome_profile.get("confidence")),
-                })
-                print(f"[PIPELINE] {ticker}: SKIP_TRADE ({outcome_profile.get('confidence')})")
-                continue
-
-            # Step 12: Assemble qualified candidate package
-            candidate = {
-                "ticker": ticker,
-                "catalyst_type": catalyst_type,
-                "eass": eass,
-                "haiku_summary": haiku_summary,
-                "outcome_profile": outcome_profile,
-                "metrics": {**entry, **enriched_regime},
-            }
-            candidates.append(candidate)
-            log_entries.append({"ticker": ticker, "status": "QUALIFIED", "eass_score": eass["eass_score"]})
-            print(f"[PIPELINE] {ticker}: QUALIFIED (EASS={eass['eass_score']}, {catalyst_type})")
-
-    return candidates
+    return [r for r in results if r is not None]

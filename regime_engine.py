@@ -7,6 +7,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 import config
 
 
@@ -71,31 +72,45 @@ _SECTOR_NAME_TO_ETF = {v: k for k, v in config.SECTOR_ETFS.items()}
 
 
 def filter_by_sector(tickers: list, top_sectors: list) -> list:
-    """Retain only tickers whose sector ETF is in the top-performing sectors."""
-    survivors = []
-    for ticker in tickers:
+    """Retain only tickers whose sector ETF is in the top-performing sectors.
+
+    Uses a thread pool to parallelize the yfinance .info HTTP calls (one per ticker).
+    """
+    def _check(ticker):
         try:
             info = yf.Ticker(ticker).info
             sector_name = info.get("sector", "")
             etf = _SECTOR_NAME_TO_ETF.get(sector_name)
             if etf and etf in top_sectors:
-                survivors.append(ticker)
+                return ticker
         except Exception:
-            pass  # skip on any data error
-    return survivors
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        results = list(executor.map(_check, tickers))
+    return [t for t in results if t is not None]
 
 
 def apply_individual_gates(tickers: list) -> list:
-    """Apply volatility and trend gates using 220 days of daily price data."""
+    """Apply volatility and trend gates using 220 days of daily price data.
+
+    Downloads all tickers in a single batch request instead of one call per ticker.
+    """
+    if not tickers:
+        return []
+
+    df = yf.download(tickers, period="220d", progress=False, auto_adjust=True)
     survivors = []
+
     for ticker in tickers:
         try:
-            df = yf.download(ticker, period="220d", progress=False, auto_adjust=True)
             if isinstance(df.columns, pd.MultiIndex):
                 high = df["High"][ticker].dropna()
                 low = df["Low"][ticker].dropna()
                 close = df["Close"][ticker].dropna()
             else:
+                # Single-ticker fallback: yfinance returns flat DataFrame
                 high = df["High"].dropna()
                 low = df["Low"].dropna()
                 close = df["Close"].dropna()
@@ -158,16 +173,22 @@ def apply_earnings_gate(tickers_with_metrics: list) -> list:
 
 
 def apply_sector_leadership_gate(tickers_with_metrics: list) -> list:
-    """Retain the highest pre-market gap ticker per sub-industry."""
-    by_industry: dict[str, dict] = {}
-    for entry in tickers_with_metrics:
-        ticker = entry["ticker"]
-        try:
-            info = yf.Ticker(ticker).info
-            industry = info.get("industry", "Unknown")
-        except Exception:
-            industry = "Unknown"
+    """Retain the highest pre-market gap ticker per sub-industry.
 
+    Fetches industry strings in parallel to avoid sequential HTTP stalls.
+    """
+    def _fetch_industry(entry):
+        try:
+            info = yf.Ticker(entry["ticker"]).info
+            return info.get("industry", "Unknown")
+        except Exception:
+            return "Unknown"
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        industries = list(executor.map(_fetch_industry, tickers_with_metrics))
+
+    by_industry: dict[str, dict] = {}
+    for entry, industry in zip(tickers_with_metrics, industries):
         gap = entry.get("pre_market_gap_pct", 0.0) or 0.0
         if industry not in by_industry or gap > by_industry[industry].get("pre_market_gap_pct", 0.0):
             entry["industry"] = industry
