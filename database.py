@@ -98,49 +98,109 @@ def build_regime_vector(regime_data: dict) -> list:
 
 
 def build_catalyst_vector(catalyst_data: dict, catalyst_type: str) -> list:
-    """Build a 4-dimensional normalized catalyst vector, branched by catalyst_type prefix."""
+    """Build a 4-dimensional universal catalyst vector.
+
+    Dims are catalyst-type-agnostic so vectors are comparable across types:
+      [0] surprise_magnitude  — weighted deviation from market expectation [0, 1]
+      [1] surprise_direction  — 1.0 = positive surprise, 0.0 = negative [0, 1]
+      [2] forward_signal      — implication for future cash flows [0, 1]
+      [3] business_impact     — event size relative to company valuation [0, 1]
+
+    Valuation priority for earnings: guidance > revenue > EPS, because guidance
+    directly updates the forward DCF model while EPS is susceptible to buybacks
+    and one-time charges.
+    """
     ct = catalyst_type.lower()
 
+    # --- EARNINGS / REVENUE ---
     if ct.startswith("earnings") or ct.startswith("revenue"):
+        eps  = catalyst_data.get("eps_surprise_pct", 0.0)
+        rev  = catalyst_data.get("revenue_surprise_pct", 0.0)
+        guid = catalyst_data.get("guidance_delta_pct", 0.0)
+        # Weighted magnitude: guidance 50%, revenue 35%, EPS 15%
+        # Max raw ≈ 0.50×0.20 + 0.35×0.30 + 0.15×0.50 = 0.28
+        raw = 0.50 * abs(guid) + 0.35 * abs(rev) + 0.15 * abs(eps)
         return [
-            normalize(catalyst_data.get("eps_surprise_pct", 0.0), -0.30, 0.50),
-            normalize(catalyst_data.get("revenue_surprise_pct", 0.0), -0.20, 0.30),
-            normalize(catalyst_data.get("guidance_delta_pct", 0.0), -0.20, 0.20),
-            normalize(catalyst_data.get("analyst_revision_count", 0), 0, 25),
+            normalize(raw, 0, 0.28),
+            0.0 if ct == "earnings_miss" else 1.0,
+            normalize(guid, -0.20, 0.20),
+            normalize(abs(guid) + abs(eps), 0, 0.70),
         ]
 
+    # --- GUIDANCE ---
     if ct.startswith("guidance"):
+        eps_g = catalyst_data.get("eps_guidance_delta_pct", 0.0)
+        rev_g = catalyst_data.get("revenue_guidance_delta_pct", 0.0)
+        # Max raw ≈ 0.60×0.30 + 0.40×0.20 = 0.26
+        raw = 0.60 * abs(eps_g) + 0.40 * abs(rev_g)
         return [
-            normalize(catalyst_data.get("eps_guidance_delta_pct", 0.0), -0.30, 0.30),
-            normalize(catalyst_data.get("revenue_guidance_delta_pct", 0.0), -0.20, 0.20),
-            float(bool(catalyst_data.get("ceo_statement_positive", False))),
-            normalize(catalyst_data.get("days_to_next_earnings", 45), 6, 90),
+            normalize(raw, 0, 0.26),
+            0.0 if ct == "guidance_cut" else 1.0,
+            normalize(eps_g, -0.30, 0.30),
+            normalize(abs(eps_g) + abs(rev_g) * 0.5, 0, 0.45),
         ]
 
+    # --- FDA ---
     if ct.startswith("fda"):
+        was_expected  = float(bool(catalyst_data.get("was_expected", False)))
+        market_cap    = catalyst_data.get("market_cap_billions", 10.0)
+        pipeline      = catalyst_data.get("pipeline_depth", 1)
+        # Smaller company + unexpected event = larger surprise_magnitude
+        impact_factor = 1.0 - normalize(market_cap, 0.1, 50)
         return [
-            float(bool(catalyst_data.get("was_expected", False))),
-            float(bool(catalyst_data.get("has_competitor", False))),
-            normalize(catalyst_data.get("market_cap_billions", 1.0), 0.1, 50),
-            normalize(catalyst_data.get("pipeline_depth", 1), 1, 20),
+            (1.0 - was_expected) * 0.6 + impact_factor * 0.4,
+            0.0 if ct == "fda_rejection" else 1.0,
+            normalize(pipeline, 1, 20),
+            impact_factor,
         ]
 
-    if ct.startswith("ma") or ct.startswith("buyback"):
+    # --- M&A TARGET ---
+    if ct == "ma_target":
+        premium   = catalyst_data.get("premium_pct", 0.0)
+        cash_deal = float(bool(catalyst_data.get("cash_deal", False)))
+        hostile   = float(bool(catalyst_data.get("hostile_bid", False)))
+        # Premium IS the valuation change for the target
+        mag = normalize(premium, 0, 0.60)
         return [
-            normalize(catalyst_data.get("premium_pct", 0.0), 0, 0.60),
-            float(bool(catalyst_data.get("cash_deal", False))),
-            normalize(catalyst_data.get("deal_size_billions", 1.0), 0.1, 100),
-            float(bool(catalyst_data.get("hostile_bid", False))),
+            mag,
+            1.0,                                        # target is always positive
+            cash_deal * 0.7 + (1.0 - hostile) * 0.3,   # certainty of capturing premium
+            mag,                                        # business_impact == premium
         ]
 
+    # --- M&A ACQUIRER ---
+    if ct == "ma_acquirer":
+        deal_size = catalyst_data.get("deal_size_billions", 1.0)
+        cash_deal = float(bool(catalyst_data.get("cash_deal", False)))
+        hostile   = float(bool(catalyst_data.get("hostile_bid", False)))
+        mag = normalize(deal_size, 0.1, 100)
+        return [
+            mag,
+            0.5,                                    # acquirer impact is mixed
+            cash_deal * 0.5 + (1.0 - hostile) * 0.5,
+            mag,
+        ]
+
+    # --- BUYBACK ---
+    if ct.startswith("buyback"):
+        deal_size = catalyst_data.get("deal_size_billions", 1.0)
+        mag = normalize(deal_size, 0.1, 50)
+        return [mag, 1.0, mag, mag]
+
+    # --- GOVERNMENT / COMMERCIAL CONTRACT ---
     if ct.startswith("government") or ct.startswith("commercial"):
+        value      = catalyst_data.get("contract_value_millions", 10.0)
+        multi_year = float(bool(catalyst_data.get("multi_year", False)))
+        sole_src   = float(bool(catalyst_data.get("sole_source", False)))
+        margin     = catalyst_data.get("margin_impact_pct", 0.0)
         return [
-            normalize(catalyst_data.get("contract_value_millions", 10.0), 1, 5000),
-            float(bool(catalyst_data.get("multi_year", False))),
-            float(bool(catalyst_data.get("sole_source", False))),
-            normalize(catalyst_data.get("margin_impact_pct", 0.0), 0, 0.05),
+            normalize(value, 1, 5000),
+            1.0,                                  # contract win is always positive
+            multi_year * 0.5 + sole_src * 0.5,   # recurring / locked revenue
+            normalize(margin, 0, 0.05),
         ]
 
+    # Fallback for unknown catalyst types
     return [0.5, 0.5, 0.5, 0.5]
 
 
