@@ -1,10 +1,54 @@
-"""ChromaDB setup and hierarchical collections for Strategy Engine v5.1."""
+"""PostgreSQL pgvector setup for Strategy Engine v5.1.
 
-import chromadb
-import numpy as np
-import json
+Public interface (unchanged from ChromaDB version):
+  initialize_database(dsn=None) -> psycopg2 connection
+  store_setup(conn, catalyst_type, regime_data, catalyst_data, outcome,
+              news_header=None, news_summary=None)
+  query_similar_setups(conn, catalyst_type, regime_data, catalyst_data) -> dict
+  calculate_outcome_profile(matches) -> dict
+
+The connection returned by initialize_database() is passed as the first
+argument to store_setup() and query_similar_setups() — callers treat it
+as an opaque handle, identical to how the old ChromaDB client was used.
+"""
+
+import os
 import datetime
+import psycopg2
+import psycopg2.extras
+from pgvector.psycopg2 import register_vector
+import numpy as np
 import config
+
+# SQL DDL embedded here so initialize_database() is self-contained.
+# All statements use IF NOT EXISTS — safe to run on every startup.
+_SCHEMA_SQL = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS setups (
+    id                SERIAL PRIMARY KEY,
+    doc_id            TEXT UNIQUE NOT NULL,
+    ticker            TEXT NOT NULL,
+    trade_date        TEXT NOT NULL,
+    catalyst_type     TEXT NOT NULL,
+    embedding         vector(12) NOT NULL,
+    news_header       TEXT,
+    news_summary      TEXT,
+    day1_return       DOUBLE PRECISION NOT NULL,
+    day3_return       DOUBLE PRECISION NOT NULL,
+    max_adverse_move  DOUBLE PRECISION NOT NULL,
+    held_above_21ema  DOUBLE PRECISION NOT NULL,
+    regime_at_exit    TEXT NOT NULL,
+    exit_trigger      TEXT NOT NULL,
+    created_at        TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS setups_catalyst_type_idx
+    ON setups (catalyst_type);
+
+CREATE INDEX IF NOT EXISTS setups_embedding_hnsw_idx
+    ON setups USING hnsw (embedding vector_l2_ops);
+"""
 
 
 def normalize(value, min_val, max_val):
@@ -14,13 +58,20 @@ def normalize(value, min_val, max_val):
     return float(np.clip((value - min_val) / (max_val - min_val), 0.0, 1.0))
 
 
-def initialize_database():
-    """Connect to ChromaDB and ensure all catalyst collections exist."""
-    client = chromadb.PersistentClient(path=config.VECTOR_DB_PATH)
-    for name in config.CATALYST_COLLECTIONS:
-        client.get_or_create_collection(name)
-    print(f"[DB] {len(config.CATALYST_COLLECTIONS)} collections ready at {config.VECTOR_DB_PATH}")
-    return client
+def initialize_database(dsn: str = None):
+    """Connect to PostgreSQL, apply schema, and return an open connection.
+
+    Reads DATABASE_URL from the environment when dsn is not supplied.
+    Registers the pgvector type so Python lists are accepted as vector(12).
+    """
+    dsn = dsn or os.getenv("DATABASE_URL", config.POSTGRES_DSN)
+    conn = psycopg2.connect(dsn)
+    register_vector(conn)
+    with conn.cursor() as cur:
+        cur.execute(_SCHEMA_SQL)
+    conn.commit()
+    print("[DB] PostgreSQL connected; setups table ready")
+    return conn
 
 
 def build_regime_vector(regime_data: dict) -> list:
