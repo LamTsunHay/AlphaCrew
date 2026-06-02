@@ -204,36 +204,52 @@ def build_catalyst_vector(catalyst_data: dict, catalyst_type: str) -> list:
     return [0.5, 0.5, 0.5, 0.5]
 
 
-def store_setup(client, catalyst_type: str, regime_data: dict, catalyst_data: dict, outcome: dict):
-    """Store a historical setup as a 12-dim vector in the appropriate collection."""
+def store_setup(
+    conn,
+    catalyst_type: str,
+    regime_data: dict,
+    catalyst_data: dict,
+    outcome: dict,
+    news_header: str = None,
+    news_summary: str = None,
+):
+    """Build a 12-dim vector and upsert one row into setups.
+
+    ticker and date are read from outcome (same convention as the old ChromaDB version).
+    ON CONFLICT DO NOTHING makes repeated calls with the same data safe.
+    news_header and news_summary are optional — NULL for historical seed data.
+    """
     regime_vec = build_regime_vector(regime_data)
     catalyst_vec = build_catalyst_vector(catalyst_data, catalyst_type)
     full_vector = regime_vec + catalyst_vec
 
-    collection = client.get_or_create_collection(catalyst_type)
+    ticker   = str(outcome.get("ticker") or "UNKNOWN")
+    date_str = str(outcome.get("date") or datetime.date.today().isoformat())
+    doc_id   = f"{ticker}_{date_str}_{hash(str(full_vector)) % 1_000_000:06d}"
 
-    ticker = outcome.get("ticker", "UNKNOWN")
-    date_str = outcome.get("date", datetime.date.today().isoformat())
-    doc_id = f"{ticker}_{date_str}_{hash(str(full_vector)) % 1_000_000:06d}"
-
-    # Guard against None values — ChromaDB metadata must be scalar
-    metadata = {
-        "ticker": str(ticker),
-        "date": str(date_str),
-        "catalyst_type": str(catalyst_type),
-        "day1_return": float(outcome.get("day1_return") or 0.0),
-        "day3_return": float(outcome.get("day3_return") or 0.0),
-        "max_adverse_move": float(outcome.get("max_adverse_move") or 0.0),
-        "held_above_21ema": float(bool(outcome.get("held_above_21ema", False))),
-        "regime_at_exit": str(outcome.get("regime_at_exit") or "UNKNOWN"),
-        "exit_trigger": str(outcome.get("exit_trigger") or "UNKNOWN"),
-    }
-
-    collection.add(
-        embeddings=[full_vector],
-        ids=[doc_id],
-        metadatas=[metadata],
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO setups
+                (doc_id, ticker, trade_date, catalyst_type, embedding,
+                 news_header, news_summary,
+                 day1_return, day3_return, max_adverse_move,
+                 held_above_21ema, regime_at_exit, exit_trigger)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (doc_id) DO NOTHING
+            """,
+            (
+                doc_id, ticker, date_str, catalyst_type, full_vector,
+                news_header, news_summary,
+                float(outcome.get("day1_return") or 0.0),
+                float(outcome.get("day3_return") or 0.0),
+                float(outcome.get("max_adverse_move") or 0.0),
+                float(bool(outcome.get("held_above_21ema", False))),
+                str(outcome.get("regime_at_exit") or "UNKNOWN"),
+                str(outcome.get("exit_trigger") or "UNKNOWN"),
+            ),
+        )
+    conn.commit()
 
 
 def query_similar_setups(client, catalyst_type: str, regime_data: dict, catalyst_data: dict) -> dict:
