@@ -252,28 +252,37 @@ def store_setup(
     conn.commit()
 
 
-def query_similar_setups(client, catalyst_type: str, regime_data: dict, catalyst_data: dict) -> dict:
-    """Query ChromaDB for similar historical setups and return an outcome profile."""
+def query_similar_setups(conn, catalyst_type: str, regime_data: dict, catalyst_data: dict) -> dict:
+    """Find up to 80 historically similar setups via L2 distance on the 12-dim embedding.
+
+    Filters by catalyst_type in SQL (index), ranks by vector distance, then keeps
+    only rows within VECTOR_DB_MAX_DISTANCE in Python — mirrors the old ChromaDB filter.
+    Returns the outcome profile dict from calculate_outcome_profile().
+    """
     regime_vec = build_regime_vector(regime_data)
     catalyst_vec = build_catalyst_vector(catalyst_data, catalyst_type)
     query_vector = regime_vec + catalyst_vec
 
-    collection = client.get_or_create_collection(catalyst_type)
-    results = collection.query(
-        query_embeddings=[query_vector],
-        n_results=80,
-        include=["metadatas", "distances"],
-    )
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT ticker, trade_date AS date, catalyst_type,
+                   news_header, news_summary,
+                   day1_return, day3_return, max_adverse_move,
+                   held_above_21ema, regime_at_exit, exit_trigger,
+                   embedding <-> %s::vector AS distance
+            FROM setups
+            WHERE catalyst_type = %s
+            ORDER BY distance
+            LIMIT 80
+            """,
+            (query_vector, catalyst_type),
+        )
+        rows = cur.fetchall()
 
-    metadatas = results.get("metadatas", [[]])[0]
-    distances = results.get("distances", [[]])[0]
-
-    filtered = [
-        m for m, d in zip(metadatas, distances)
-        if d < config.VECTOR_DB_MAX_DISTANCE
-    ]
-
-    return calculate_outcome_profile(filtered)
+    # Apply distance threshold in Python — identical semantics to the old ChromaDB filter
+    matches = [dict(r) for r in rows if r["distance"] < config.VECTOR_DB_MAX_DISTANCE]
+    return calculate_outcome_profile(matches)
 
 
 def calculate_outcome_profile(matches: list) -> dict:
