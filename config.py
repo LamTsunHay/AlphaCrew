@@ -3,6 +3,8 @@
 Single source of truth. No logic here — values only.
 """
 
+import os
+
 SYSTEM_TIMEZONE = "US/Eastern"
 STRATEGY_OUTPUT_PATH = "./final_strategy_blueprint.md"
 LOG_QUEUE_PATH = "./active_monitoring_queue.json"
@@ -14,7 +16,7 @@ LLM_MAX_TOKENS = 1000
 
 # Testing mode — set True to route both LLM stages to Groq (free tier)
 TESTING_MODE        = False
-GROQ_API_KEY        = ""   # set in .env as GROQ_API_KEY
+GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL       = "https://api.groq.com/openai/v1"
 GROQ_STAGE_3_MODEL  = "llama-3.1-8b-instant"     # replaces Haiku
 GROQ_STAGE_4_MODEL  = "llama-3.3-70b-versatile"  # replaces Sonnet
@@ -59,7 +61,7 @@ SHOCK_WEIGHT_MATRIX = {
 }
 
 # PostgreSQL pgvector
-POSTGRES_DSN = ""           # set via DATABASE_URL in .env; loaded in database.py
+POSTGRES_DSN = os.environ.get("DATABASE_URL", "")
 VECTOR_DB_MIN_SAMPLES = 40
 VECTOR_DB_MAX_DISTANCE = 0.35
 
@@ -84,7 +86,7 @@ CATALYST_COLLECTIONS = [
 
 # News provider — "polygon" or "finnhub"
 NEWS_PROVIDER = "finnhub"
-FINNHUB_API_KEY = ""  # set in .env as FINNHUB_API_KEY
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
 FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/company-news"
 
 # Sector ETF universe for rotation filter
