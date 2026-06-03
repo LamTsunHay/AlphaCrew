@@ -3,7 +3,7 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS setups (
+CREATE TABLE IF NOT EXISTS historical_setups (
     id                SERIAL PRIMARY KEY,
     doc_id            TEXT UNIQUE NOT NULL,
     ticker            TEXT NOT NULL,
@@ -26,11 +26,12 @@ CREATE TABLE IF NOT EXISTS setups (
     created_at        TIMESTAMP DEFAULT NOW()
 );
 
--- Fast WHERE catalyst_type = $1 filter (replaces 15 separate collections)
-CREATE INDEX IF NOT EXISTS setups_catalyst_type_idx
-    ON setups (catalyst_type);
+-- Hash index for O(1) equality lookup on WHERE catalyst_type = $1
+-- (never used for ranges or ordering, so btree's log(n) overhead is wasted)
+CREATE INDEX IF NOT EXISTS historical_setups_catalyst_type_idx
+    ON historical_setups USING hash (catalyst_type);
 
 -- HNSW approximate nearest-neighbor on the 12-dim embedding
 -- Uses L2 distance (<->) to match ChromaDB's default metric
-CREATE INDEX IF NOT EXISTS setups_embedding_hnsw_idx
-    ON setups USING hnsw (embedding vector_l2_ops);
+CREATE INDEX IF NOT EXISTS historical_setups_embedding_hnsw_idx
+    ON historical_setups USING hnsw (embedding vector_l2_ops);

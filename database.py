@@ -25,7 +25,7 @@ import config
 _SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS setups (
+CREATE TABLE IF NOT EXISTS historical_setups (
     id                SERIAL PRIMARY KEY,
     doc_id            TEXT UNIQUE NOT NULL,
     ticker            TEXT NOT NULL,
@@ -43,11 +43,11 @@ CREATE TABLE IF NOT EXISTS setups (
     created_at        TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS setups_catalyst_type_idx
-    ON setups (catalyst_type);
+CREATE INDEX IF NOT EXISTS historical_setups_catalyst_type_idx
+    ON historical_setups USING hash (catalyst_type);
 
-CREATE INDEX IF NOT EXISTS setups_embedding_hnsw_idx
-    ON setups USING hnsw (embedding vector_l2_ops);
+CREATE INDEX IF NOT EXISTS historical_setups_embedding_hnsw_idx
+    ON historical_setups USING hnsw (embedding vector_l2_ops);
 """
 
 
@@ -70,7 +70,7 @@ def initialize_database(dsn: str = None):
     with conn.cursor() as cur:
         cur.execute(_SCHEMA_SQL)
     conn.commit()
-    print("[DB] PostgreSQL connected; setups table ready")
+    print("[DB] PostgreSQL connected; historical_setups table ready")
     return conn
 
 
@@ -213,7 +213,7 @@ def store_setup(
     news_header: str = None,
     news_summary: str = None,
 ):
-    """Build a 12-dim vector and upsert one row into setups.
+    """Build a 12-dim vector and upsert one row into historical_setups.
 
     ticker and date are read from outcome (same convention as the old ChromaDB version).
     ON CONFLICT DO NOTHING makes repeated calls with the same data safe.
@@ -230,7 +230,7 @@ def store_setup(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO setups
+            INSERT INTO historical_setups
                 (doc_id, ticker, trade_date, catalyst_type, embedding,
                  news_header, news_summary,
                  day1_return, day3_return, max_adverse_move,
@@ -271,7 +271,7 @@ def query_similar_setups(conn, catalyst_type: str, regime_data: dict, catalyst_d
                    day1_return, day3_return, max_adverse_move,
                    held_above_21ema, regime_at_exit, exit_trigger,
                    embedding <-> %s::vector AS distance
-            FROM setups
+            FROM historical_setups
             WHERE catalyst_type = %s
             ORDER BY distance
             LIMIT 80
