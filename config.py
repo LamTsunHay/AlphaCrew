@@ -58,13 +58,12 @@ SHOCK_WEIGHT_MATRIX = {
     "market_movers": 0.30,
 }
 
-# ChromaDB
-VECTOR_DB_PATH = "./chroma_db"
+# PostgreSQL pgvector
+POSTGRES_DSN = ""           # set via DATABASE_URL in .env; loaded in database.py
 VECTOR_DB_MIN_SAMPLES = 40
 VECTOR_DB_MAX_DISTANCE = 0.35
 
-# ChromaDB collection names — one per catalyst family
-# CRITICAL: Never cross-query between collections
+# Valid catalyst type names — used for validation only (no longer one-per-collection)
 CATALYST_COLLECTIONS = [
     "earnings_beat_large",
     "earnings_beat_small",

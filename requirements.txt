@@ -2,7 +2,8 @@ anthropic
 yfinance
 pandas
 numpy
-chromadb
+psycopg2-binary
+pgvector
 aiohttp
 schedule
 python-dotenv
