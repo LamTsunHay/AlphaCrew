@@ -5,6 +5,10 @@ active_monitoring_queue.json
 
 # Claude Code IDE config
 .claude/
+.mcp.json
+
+# Superpowers plan docs (local planning artifacts, not source)
+docs/superpowers/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
