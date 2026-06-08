@@ -272,6 +272,7 @@ def test_classify_and_summarize_returns_valid_structure():
     assert result["catalyst_type"] == "ma_acquirer"
     assert result["winning_article"]["title"] == "Company XYZ to acquire Rival Corp"
     assert "XYZ announced" in result["summary"]
+    assert "reasoning" in result
 
 
 def test_classify_and_summarize_fallback_on_invalid_catalyst_type():
@@ -286,6 +287,8 @@ def test_classify_and_summarize_fallback_on_invalid_catalyst_type():
     with patch("llm_client.chat", return_value=mock_response):
         result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
     assert result["catalyst_type"] == "market_movers"
+    assert result["winning_article"] is not None
+    assert result["winning_article"]["title"] == "Test headline"
 
 
 def test_classify_and_summarize_returns_none_on_bad_json():
@@ -308,6 +311,8 @@ def test_classify_and_summarize_extracts_json_from_markdown_block():
     with patch("llm_client.chat", return_value=f"```json\n{inner}\n```"):
         result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
     assert result["catalyst_type"] == "fda_approval_nda"
+    assert "FDA granted NDA approval" in result["summary"]
+    assert result["winning_article"]["title"] == "FDA approved new drug NDA for XYZ"
 
 
 def test_classify_and_summarize_empty_articles_returns_none_without_calling_llm():
@@ -330,6 +335,7 @@ def test_classify_and_summarize_out_of_bounds_article_index_fallback():
     with patch("llm_client.chat", return_value=mock_response):
         result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
     assert result["winning_article"] == articles[0]
+    assert result["catalyst_type"] == "earnings_beat_large"
 
 
 def test_classify_and_summarize_prompt_contains_full_ranked_catalyst_list():
@@ -343,11 +349,11 @@ def test_classify_and_summarize_prompt_contains_full_ranked_catalyst_list():
     })
     with patch("llm_client.chat", return_value=mock_response) as mock_chat:
         pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
-    system_prompt = mock_chat.call_args[0][3]  # 4th positional arg to llm_client.chat
+    system_prompt = mock_chat.call_args.args[3]  # 4th positional arg: chat(client, provider, model, system_prompt, ...)
     for cat in config.CATALYST_PRIORITY:
         assert cat in system_prompt, f"Missing catalyst type in prompt: {cat}"
-    assert "1." in system_prompt   # rank numbers present
-    assert "12." in system_prompt
+    assert "1. ma_acquirer" in system_prompt   # rank 1 anchor
+    assert f"{len(config.CATALYST_PRIORITY)}. market_movers" in system_prompt  # last rank anchor
 
 
 def test_classify_and_summarize_falls_back_to_regex_on_llm_exception():
@@ -360,3 +366,4 @@ def test_classify_and_summarize_falls_back_to_regex_on_llm_exception():
     assert result is not None
     assert result["catalyst_type"] == "ma_acquirer"
     assert result["summary"] == ""
+    assert result["winning_article"]["title"] == "Company XYZ to acquire Rival Corp"
