@@ -144,6 +144,13 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     if not articles:
         return None
 
+    # Pre-screen with regex: if no specific catalyst found across all articles,
+    # skip the LLM call entirely — preserves the free-gate-before-paid invariant.
+    pre_type = select_best_catalyst(articles)
+    if pre_type == "market_movers":
+        winning = articles[0]
+        return {"catalyst_type": "market_movers", "winning_article": winning, "summary": "", "reasoning": ""}
+
     ranked_catalysts = "\n".join(
         f"{i + 1:2}. {cat}"
         for i, cat in enumerate(config.CATALYST_PRIORITY)
@@ -169,7 +176,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
 
     user_prompt = f"Ticker: {ticker}\n\nArticles:\n{articles_text[:4000]}"
     if len(articles_text) > 4000:
-        visible = articles_text[:4000].count('\n[')
+        visible = articles_text[:4000].count('\n[') + 1
         print(f"[PIPELINE] {ticker}: articles_text truncated — {visible}/{len(articles)} articles visible to LLM")
     model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
 
@@ -184,11 +191,17 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     start = raw.find('{')
     end = raw.rfind('}')
     if start == -1 or end == -1 or end <= start:
-        return None
+        print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (no JSON object) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
     try:
         result = json.loads(raw[start:end + 1])
     except (json.JSONDecodeError, TypeError):
-        return None
+        print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (invalid JSON) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
     if result.get("catalyst_type") not in config.CATALYST_PRIORITY:
         result["catalyst_type"] = "market_movers"
