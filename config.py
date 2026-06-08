@@ -84,6 +84,23 @@ CATALYST_COLLECTIONS = [
     "commercial_contract",
 ]
 
+# Catalyst types ordered from highest to lowest impact priority.
+# Mirrors the if-elif chain in pipeline.classify_catalyst_type().
+CATALYST_PRIORITY = (
+    "ma_acquirer",
+    "ma_target",
+    "fda_approval_nda",
+    "fda_approval_fast_track",
+    "fda_rejection",
+    "buyback_initiation",
+    "government_contract",
+    "commercial_contract",
+    "guidance_raise_full",
+    "guidance_cut",
+    "earnings_beat_large",
+    "market_movers",
+)
+
 # News provider — "polygon" or "finnhub"
 NEWS_PROVIDER = "finnhub"
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
