@@ -329,22 +329,6 @@ def calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict:
     }
 
 
-async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str) -> str:
-    """Summarize news catalyst in 3 sentences using Stage 3 LLM (Haiku or Groq equivalent)."""
-    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
-    return llm_client.chat(
-        client,
-        provider,
-        model,
-        (
-            "You are a financial analyst. Summarize the key catalyst facts in exactly 3 sentences. "
-            "Include: what happened, the numerical magnitude, and the forward implication. Be factual only."
-        ),
-        f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}",
-        config.LLM_MAX_TOKENS,
-    )
-
-
 async def _process_ticker(entry: dict, regime_data: dict, db_client, session: aiohttp.ClientSession,
                           client, provider: str, semaphore: asyncio.Semaphore) -> dict | None:
     """Process a single ticker through the full paid pipeline.
