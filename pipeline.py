@@ -362,12 +362,13 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
             return None
 
-        # Step 3: Classify catalyst type — scan all articles, pick highest-priority
-        catalyst_type = select_best_catalyst(articles)
-        winning_article = next(
-            (a for a in articles if classify_catalyst_type(a) == catalyst_type),
-            articles[0],
-        )
+        # Step 3: Classify catalyst type and summarize — single Haiku call across all articles
+        llm_result = classify_and_summarize(articles, ticker, client, provider)
+        if llm_result is None:
+            print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_FAILED")
+            return None
+        catalyst_type = llm_result["catalyst_type"]
+        winning_article = llm_result["winning_article"]
         print(
             f"[PIPELINE] {ticker}: CATALYST={catalyst_type} | "
             f"scanned={len(articles)} articles | "
@@ -390,10 +391,8 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: EASS_BELOW_THRESHOLD ({eass['eass_score']})")
             return None
 
-        # Step 8: Haiku summarization
-        haiku_summary = await summarize_news_haiku(
-            eass_inputs["raw_text_combined"], ticker, client, provider
-        )
+        # Step 8: Summary already produced by classify_and_summarize in Step 3
+        haiku_summary = llm_result.get("summary", "")
 
         # Step 9: Build catalyst_data dict for ChromaDB vector
         catalyst_data = {

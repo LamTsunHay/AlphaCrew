@@ -162,8 +162,15 @@ async def test_run_pipeline_market_mover_skipped():
     """Tickers classified as market_movers are skipped with LOW_WEIGHT_CATALYST."""
     article = {"title": "Stock surges on heavy volume", "description": ""}
     mock_client = MagicMock()
+    mock_llm_response = json.dumps({
+        "catalyst_type": "market_movers",
+        "article_index": 0,
+        "summary": "Stock surged on heavy volume. No specific magnitude given. Outlook unclear.",
+        "reasoning": "Generic momentum article, no specific catalyst.",
+    })
     with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
-         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")), \
+         patch("pipeline.llm_client.chat", return_value=mock_llm_response):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
@@ -177,8 +184,15 @@ async def test_run_pipeline_low_eass_skipped():
     """Tickers with EASS < 2.0 are skipped."""
     article = {"title": "Company earns $1.00 vs $1.00 expected", "description": ""}
     mock_client = MagicMock()
+    mock_llm_response = json.dumps({
+        "catalyst_type": "earnings_beat_large",
+        "article_index": 0,
+        "summary": "Company reported EPS of $1.00 in line with $1.00 consensus. No beat or miss. Flat guidance.",
+        "reasoning": "Earnings article with no surprise component.",
+    })
     with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
-         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")), \
+         patch("pipeline.llm_client.chat", return_value=mock_llm_response):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
