@@ -184,3 +184,51 @@ async def test_run_pipeline_low_eass_skipped():
             MagicMock(),
         )
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# select_best_catalyst()
+# ---------------------------------------------------------------------------
+
+def test_select_best_catalyst_finds_buried_ma():
+    """articles[0] is generic noise; the catalyst is in articles[1]."""
+    articles = [
+        {"title": "Stock surges on heavy volume", "description": ""},
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_all_generic_returns_market_movers():
+    articles = [
+        {"title": "Stock surges on heavy volume", "description": ""},
+        {"title": "Trading session recap", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "market_movers"
+
+
+def test_select_best_catalyst_prefers_ma_over_earnings():
+    """M&A is higher priority than earnings even if earnings article comes first."""
+    articles = [
+        {"title": "Company reports strong earnings beat", "description": ""},
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_single_article_passthrough():
+    """Single-article list behaves identically to classify_catalyst_type."""
+    articles = [{"title": "FDA approved new drug NDA for XYZ", "description": ""}]
+    assert pipeline.select_best_catalyst(articles) == "fda_approval_nda"
+
+
+def test_select_best_catalyst_prefers_fda_over_guidance():
+    articles = [
+        {"title": "Company raises full-year guidance above expectations", "description": ""},
+        {"title": "FDA approved new drug NDA for XYZ", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "fda_approval_nda"
+
+
+def test_select_best_catalyst_empty_list_returns_market_movers():
+    assert pipeline.select_best_catalyst([]) == "market_movers"
