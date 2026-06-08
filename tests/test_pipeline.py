@@ -216,10 +216,26 @@ def test_select_best_catalyst_prefers_ma_over_earnings():
     assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
 
 
-def test_select_best_catalyst_single_article_passthrough():
-    """Single-article list behaves identically to classify_catalyst_type."""
+def test_select_best_catalyst_single_fda_article():
     articles = [{"title": "FDA approved new drug NDA for XYZ", "description": ""}]
     assert pipeline.select_best_catalyst(articles) == "fda_approval_nda"
+
+
+def test_select_best_catalyst_catalyst_in_description_field():
+    """Catalyst keyword in description (not title) must still be found."""
+    articles = [
+        {"title": "Market update", "description": "Company acquires rival in $2B deal"},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_duplicate_catalyst_type():
+    """Two articles with the same catalyst type should still return that type."""
+    articles = [
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+        {"title": "XYZ acquisition deal confirmed", "description": "acquiring target for $3B"},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
 
 
 def test_select_best_catalyst_prefers_fda_over_guidance():
