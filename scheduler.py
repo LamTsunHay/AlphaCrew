@@ -99,23 +99,16 @@ async def run_premarket_pipeline(db_client):
         print("[SCHEDULER] ABORT: NO_EARNINGS_GATE_SURVIVORS")
         return
 
-    # STEP 1.5 — SECTOR LEADERSHIP GATE (requires pre-market gap data)
+    # STEP 1.5 — PRE-MARKET GAP FETCH (needed by pipeline + leadership gate)
+    # Leadership dedup is intentionally deferred until after news fetch so that
+    # a high-gap ticker with no catalyst doesn't silently eliminate its entire
+    # sub-industry from reaching the paid gate.
     for entry in earnings_survivors:
         entry["pre_market_gap_pct"] = _get_premarket_gap(entry["ticker"])
 
-    leaders = regime_engine.apply_sector_leadership_gate(earnings_survivors)
-    log_entries.append({"step": "LEADERSHIP_GATE", "count": len(leaders), "leaders": [e["ticker"] for e in leaders]})
-    print(f"[1.5] Leaders: {[e['ticker'] for e in leaders]}")
-
-    if not leaders:
-        log_entries.append({"step": "ABORT", "reason": "NO_LEADERS_IDENTIFIED"})
-        risk_auditor.write_outputs([], log_entries)
-        print("[SCHEDULER] ABORT: NO_LEADERS_IDENTIFIED")
-        return
-
-    # STEP 1.6–1.7 — PAID PIPELINE (only survivors reach here)
-    print(f"\n[SCHEDULER] PAID API GATE REACHED — {len(leaders)} tickers qualifying")
-    candidates = await pipeline.run_pipeline(leaders, regime_data, db_client)
+    # STEP 1.6–1.7 — PAID PIPELINE (all earnings survivors reach here)
+    print(f"\n[SCHEDULER] PAID API GATE REACHED — {len(earnings_survivors)} tickers qualifying")
+    candidates = await pipeline.run_pipeline(earnings_survivors, regime_data, db_client)
     log_entries.append({"step": "PIPELINE", "qualified_count": len(candidates)})
 
     if not candidates:
@@ -124,9 +117,21 @@ async def run_premarket_pipeline(db_client):
         print("[SCHEDULER] ABORT: NO_CANDIDATES_AFTER_PIPELINE")
         return
 
+    # STEP 1.8 — SECTOR LEADERSHIP GATE (applied post-news so catalyst-bearing
+    # tickers compete for leadership, not just gap magnitude)
+    leaders = regime_engine.apply_sector_leadership_gate(candidates)
+    log_entries.append({"step": "LEADERSHIP_GATE", "count": len(leaders), "leaders": [e["ticker"] for e in leaders]})
+    print(f"[1.8] Leaders after pipeline dedup: {[e['ticker'] for e in leaders]}")
+
+    if not leaders:
+        log_entries.append({"step": "ABORT", "reason": "NO_LEADERS_IDENTIFIED"})
+        risk_auditor.write_outputs([], log_entries)
+        print("[SCHEDULER] ABORT: NO_LEADERS_IDENTIFIED")
+        return
+
     # STEP — SONNET AUDIT + OUTPUT
     monitoring_queue = []
-    for i, candidate in enumerate(candidates):
+    for i, candidate in enumerate(leaders):
         audit = await risk_auditor.run_sonnet_audit(candidate, client, provider)
         audit = risk_auditor.apply_regime_strategy_mutator(audit, regime_data["regime"])
 
