@@ -13,6 +13,7 @@ import datetime
 import os
 import config
 import database
+from google import genai as google_genai
 
 
 async def fetch_polygon_news(ticker: str, session: aiohttp.ClientSession) -> list:
@@ -86,8 +87,8 @@ async def fetch_news(ticker: str, session: aiohttp.ClientSession) -> list:
         raise ValueError(f"Unknown NEWS_PROVIDER: {config.NEWS_PROVIDER!r}. Use 'polygon' or 'finnhub'.")
 
 
-def classify_catalyst_type(article: dict) -> str:
-    """Classify the dominant catalyst type from an article using keyword priority order."""
+def _classify_catalyst_type_keyword(article: dict) -> str:
+    """Keyword fallback: classify catalyst type from article using substring priority order."""
     text = (article.get("title", "") + " " + article.get("description", "")).lower()
 
     if "acquisition" in text or "merger" in text or " acquires " in text or " acquiring " in text or "to acquire" in text:
@@ -116,6 +117,39 @@ def classify_catalyst_type(article: dict) -> str:
         return "earnings_beat_large"
 
     return "market_movers"
+
+
+async def classify_catalyst_type_llm(article: dict, gemini_client) -> str:
+    """Classify catalyst type using Gemini Flash; falls back to keyword matching on failure.
+
+    Sends the article title + description to Gemini with the full label list and expects
+    exactly one label string in response. Any unexpected output triggers keyword fallback.
+    """
+    valid_labels = config.CATALYST_COLLECTIONS + ["market_movers"]
+    label_list = "\n".join(f"- {lbl}" for lbl in valid_labels)
+    text = (article.get("title", "") + " " + article.get("description", ""))[:1500]
+
+    prompt = (
+        "You are a financial news classifier. Given a news snippet, return EXACTLY one label "
+        "from the list below — nothing else, no punctuation, no explanation.\n\n"
+        f"Labels:\n{label_list}\n\n"
+        "Return 'market_movers' if no specific catalyst fits.\n\n"
+        f"News: {text}"
+    )
+
+    try:
+        response = await asyncio.to_thread(
+            gemini_client.models.generate_content,
+            model=config.GEMINI_CLASSIFY_MODEL,
+            contents=prompt,
+        )
+        result = response.text.strip().lower().replace('"', "").replace("'", "")
+        if result in valid_labels:
+            return result
+    except Exception as exc:
+        print(f"[PIPELINE] Gemini classify error, falling back to keyword: {exc}")
+
+    return _classify_catalyst_type_keyword(article)
 
 
 def extract_eass_inputs(articles: list, ticker: str) -> dict:
@@ -263,7 +297,8 @@ async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str
 
 
 async def _process_ticker(entry: dict, regime_data: dict, db_client, session: aiohttp.ClientSession,
-                          client, provider: str, semaphore: asyncio.Semaphore) -> dict | None:
+                          client, provider: str, semaphore: asyncio.Semaphore,
+                          gemini_client) -> dict | None:
     """Process a single ticker through the full paid pipeline.
 
     Returns a qualified candidate dict or None if the ticker is filtered at any step.
@@ -279,8 +314,8 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
             return None
 
-        # Step 3: Classify catalyst type from top article
-        catalyst_type = classify_catalyst_type(articles[0])
+        # Step 3: Classify catalyst type from top article using Gemini Flash
+        catalyst_type = await classify_catalyst_type_llm(articles[0], gemini_client)
 
         # Step 4: Low-weight catalyst → skip
         if catalyst_type == "market_movers":
@@ -355,10 +390,11 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
     to avoid paying sequential latency for Polygon fetches and LLM calls.
     """
     semaphore = asyncio.Semaphore(5)
+    gemini_client = google_genai.Client(api_key=config.GEMINI_API_KEY)
     async with aiohttp.ClientSession() as session:
         client, provider = llm_client.create_client()
         tasks = [
-            _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore)
+            _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore, gemini_client)
             for entry in tickers_with_metrics
         ]
         results = await asyncio.gather(*tasks)
