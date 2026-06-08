@@ -294,9 +294,8 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
             return None
 
-        # Step 3: Classify catalyst type from top article
-        print(articles[0]);
-        catalyst_type = classify_catalyst_type(articles[0])
+        # Step 3: Classify catalyst type — scan all articles, pick highest-priority
+        catalyst_type = select_best_catalyst(articles)
 
         # Step 4: Low-weight catalyst → skip
         if catalyst_type == "market_movers":
