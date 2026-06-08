@@ -122,8 +122,9 @@ def select_best_catalyst(articles: list) -> str:
     """Return the highest-priority catalyst type found across all articles.
 
     Classifies each article independently via classify_catalyst_type, then
-    selects the winner by CATALYST_PRIORITY rank. Returns 'market_movers'
-    only if every article is generic or the list is empty.
+    selects the winner by CATALYST_PRIORITY rank. For an empty list, returns
+    'market_movers' directly; for all-generic articles, the loop returns
+    'market_movers' as the last entry in CATALYST_PRIORITY.
     """
     found = {classify_catalyst_type(a) for a in articles}
     for catalyst in config.CATALYST_PRIORITY:
