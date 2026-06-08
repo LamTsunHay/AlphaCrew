@@ -344,6 +344,9 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             "eass": eass,
             "haiku_summary": haiku_summary,
             "outcome_profile": outcome_profile,
+            # pre_market_gap_pct promoted to top level so sector leadership gate
+            # (applied post-pipeline) can compare gaps across sub-industry peers
+            "pre_market_gap_pct": entry.get("pre_market_gap_pct", 0.0),
             "metrics": {**entry, **enriched_regime},
         }
 

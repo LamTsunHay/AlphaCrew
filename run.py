@@ -127,34 +127,38 @@ async def main(argv=None) -> None:
         notifier.print_to_terminal([], log_entries)
         return
 
-    # Sector leadership gate — fetch gaps in parallel to avoid sequential HTTP stalls
+    # Pre-market gap fetch — needed by pipeline and post-pipeline leadership gate.
+    # Leadership dedup is deferred until after news fetch so a high-gap ticker
+    # with no catalyst doesn't silently eliminate its sub-industry.
     tickers_for_gap = [e["ticker"] for e in earnings_survivors]
     with ThreadPoolExecutor(max_workers=20) as executor:
         gap_values = list(executor.map(_get_premarket_gap, tickers_for_gap))
     for entry, gap in zip(earnings_survivors, gap_values):
         entry["pre_market_gap_pct"] = gap
 
-    leaders = regime_engine.apply_sector_leadership_gate(earnings_survivors)
-    log_entries.append({"step": "LEADERSHIP_GATE", "leaders": [e["ticker"] for e in leaders]})
-    print(f"[RUN] Leaders: {[e['ticker'] for e in leaders]}")
-
-    if not leaders:
-        notifier.print_to_terminal([], log_entries)
-        return
-
-    # Paid pipeline gate
+    # Paid pipeline gate — all earnings survivors enter
     db_client = database.initialize_database()
-    candidates = await pipeline.run_pipeline(leaders, regime_data, db_client)
+    candidates = await pipeline.run_pipeline(earnings_survivors, regime_data, db_client)
     log_entries.append({"step": "PIPELINE", "qualified_count": len(candidates)})
 
     if not candidates:
         notifier.print_to_terminal([], log_entries)
         return
 
+    # Sector leadership gate — applied post-pipeline so only catalyst-bearing
+    # tickers compete for each industry slot
+    leaders = regime_engine.apply_sector_leadership_gate(candidates)
+    log_entries.append({"step": "LEADERSHIP_GATE", "leaders": [e["ticker"] for e in leaders]})
+    print(f"[RUN] Leaders after pipeline dedup: {[e['ticker'] for e in leaders]}")
+
+    if not leaders:
+        notifier.print_to_terminal([], log_entries)
+        return
+
     # Sonnet audit + strategy cards
     client, provider = llm_client.create_client()
     strategy_cards = []
-    for candidate in candidates:
+    for candidate in leaders:
         audit = await risk_auditor.run_sonnet_audit(candidate, client, provider)
         audit = risk_auditor.apply_regime_strategy_mutator(audit, regime_data["regime"])
         stop_dist = abs(candidate["outcome_profile"].get("suggested_stop") or 0.02)
