@@ -86,6 +86,9 @@ CATALYST_COLLECTIONS = [
 
 # Catalyst types ordered from highest to lowest impact priority.
 # Mirrors the if-elif chain in pipeline.classify_catalyst_type().
+# Note: CATALYST_COLLECTIONS contains additional types (earnings_beat_small,
+# earnings_miss, guidance_raise_partial, revenue_beat_only) reserved for future
+# classify_catalyst_type() branches. If you add a branch, add the type here too.
 CATALYST_PRIORITY = (
     "ma_acquirer",
     "ma_target",
@@ -98,7 +101,7 @@ CATALYST_PRIORITY = (
     "guidance_raise_full",
     "guidance_cut",
     "earnings_beat_large",
-    "market_movers",
+    "market_movers",   # fallback — not a storage collection, never stored in DB
 )
 
 # News provider — "polygon" or "finnhub"
