@@ -168,6 +168,9 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     )
 
     user_prompt = f"Ticker: {ticker}\n\nArticles:\n{articles_text[:4000]}"
+    if len(articles_text) > 4000:
+        visible = articles_text[:4000].count('\n[')
+        print(f"[PIPELINE] {ticker}: articles_text truncated — {visible}/{len(articles)} articles visible to LLM")
     model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
 
     try:
@@ -178,11 +181,12 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
         winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
-    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-    if not json_match:
+    start = raw.find('{')
+    end = raw.rfind('}')
+    if start == -1 or end == -1 or end <= start:
         return None
     try:
-        result = json.loads(json_match.group())
+        result = json.loads(raw[start:end + 1])
     except (json.JSONDecodeError, TypeError):
         return None
 
