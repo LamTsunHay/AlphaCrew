@@ -133,6 +133,70 @@ def select_best_catalyst(articles: list) -> str:
     return "market_movers"
 
 
+def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
+    """Classify highest-impact catalyst and generate a 3-sentence summary in one Haiku call.
+
+    Sends all articles with a priority-ranked catalyst list so the LLM selects the
+    highest-rank catalyst across all articles and summarizes it in one pass.
+    Falls back to select_best_catalyst() if the LLM call raises an exception.
+    Returns None if articles is empty or the LLM response cannot be parsed.
+    """
+    if not articles:
+        return None
+
+    ranked_catalysts = "\n".join(
+        f"{i + 1:2}. {cat}"
+        for i, cat in enumerate(config.CATALYST_PRIORITY)
+    )
+
+    articles_text = "\n".join(
+        f"[{i}] {a.get('title', '')} | {a.get('description', '')} | {a.get('published_utc', '')}"
+        for i, a in enumerate(articles)
+    )
+
+    system_prompt = (
+        "You are a financial catalyst analyst. Given news articles for a ticker, "
+        "identify the single highest-impact catalyst article.\n\n"
+        f"Catalyst types ranked by market impact (1 = highest):\n{ranked_catalysts}\n\n"
+        "Rules:\n"
+        "- Select the catalyst type with the lowest rank number present across any article.\n"
+        "- If multiple articles match the same top-rank type, prefer the one with the clearest data.\n"
+        "- Return ONLY valid JSON with no markdown or explanation:\n"
+        '{"catalyst_type": "<exact type from list>", "article_index": <0-based int>, '
+        '"summary": "<3 sentences: what happened, numerical magnitude, forward implication>", '
+        '"reasoning": "<one sentence>"}'
+    )
+
+    user_prompt = f"Ticker: {ticker}\n\nArticles:\n{articles_text[:4000]}"
+    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+
+    try:
+        raw = llm_client.chat(client, provider, model, system_prompt, user_prompt, config.LLM_MAX_TOKENS)
+    except Exception as exc:
+        print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_ERROR ({exc}) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
+
+    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if not json_match:
+        return None
+    try:
+        result = json.loads(json_match.group())
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if result.get("catalyst_type") not in config.CATALYST_PRIORITY:
+        result["catalyst_type"] = "market_movers"
+
+    idx = result.get("article_index", 0)
+    if not isinstance(idx, int) or idx < 0 or idx >= len(articles):
+        idx = 0
+    result["winning_article"] = articles[idx]
+
+    return result
+
+
 def extract_eass_inputs(articles: list, ticker: str) -> dict:
     """Parse article text to extract numerical EASS inputs via regex."""
     combined = " ".join(
@@ -296,6 +360,15 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
 
         # Step 3: Classify catalyst type — scan all articles, pick highest-priority
         catalyst_type = select_best_catalyst(articles)
+        winning_article = next(
+            (a for a in articles if classify_catalyst_type(a) == catalyst_type),
+            articles[0],
+        )
+        print(
+            f"[PIPELINE] {ticker}: CATALYST={catalyst_type} | "
+            f"scanned={len(articles)} articles | "
+            f"match=\"{winning_article['title']}\" ({winning_article.get('published_utc', 'n/a')})"
+        )
 
         # Step 4: Low-weight catalyst → skip
         if catalyst_type == "market_movers":
