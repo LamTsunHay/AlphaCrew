@@ -16,7 +16,8 @@ python scheduler.py
 
 **Required environment variables** (in `.env`):
 - `ANTHROPIC_API_KEY`
-- `POLYGON_API_KEY`
+- `FINNHUB_API_KEY` ← active news provider (set `NEWS_PROVIDER="finnhub"` in `config.py`)
+- `POLYGON_API_KEY` ← kept for future use; not active
 
 ## Running the System
 
@@ -39,7 +40,7 @@ Six-module system with a strict cost-minimization principle: **all free data gat
 | `scheduler.py` | Cron loop orchestrator; hardcoded `CANDIDATE_TICKERS` list for prototype |
 | `regime_engine.py` | Free-only gates: macro regime, sector rotation, volatility/trend, earnings proximity, sector leadership |
 | `database.py` | ChromaDB local persistence; vector building and similarity queries |
-| `pipeline.py` | Paid gate: Polygon.io news → EASS calculation → Haiku summarization → ChromaDB query |
+| `pipeline.py` | News gate: Finnhub news (active) / Polygon.io (inactive) → EASS calculation → Haiku summarization → ChromaDB query |
 | `risk_auditor.py` | Sonnet structural audit → regime mutator → position sizing → strategy card output |
 
 ### Pipeline gate order (never reorder)
@@ -48,7 +49,7 @@ Six-module system with a strict cost-minimization principle: **all free data gat
 3. Volatility + trend gates (ATR14/price ≤ 10%, price > EMA21 and EMA200) — `regime_engine`
 4. Earnings proximity exclusion (±5 calendar days) — `regime_engine`
 5. Sector leadership dedup (one ticker per sub-industry by pre-market gap) — `regime_engine`
-6. **PAID GATE START**: Polygon.io news fetch — `pipeline`
+6. **NEWS GATE START**: Finnhub news fetch (active provider) — `pipeline`
 7. Catalyst classification + EASS scoring — `pipeline`
 8. ChromaDB historical similarity query — `pipeline` → `database`
 9. Claude Sonnet structural audit — `risk_auditor`
@@ -62,7 +63,7 @@ Six-module system with a strict cost-minimization principle: **all free data gat
 
 ## Critical Rules
 
-- **Never** call Polygon.io API before Step 1.6 (all free gates must pass first).
+- **Never** call the news API (Finnhub or Polygon) before Step 1.6 (all free gates must pass first).
 - **Never** call any LLM before Step 1.6.
 - ChromaDB collections are strictly partitioned by catalyst type — **never cross-query** between collections.
 - If ChromaDB returns fewer than 40 similar samples, output `INSUFFICIENT_CONFIDENCE` and skip the trade.
@@ -91,3 +92,7 @@ Two components are intentionally left as stubs and documented in code:
 - **Options component** (EASS Component 4): skipped entirely until Polygon options feed is activated.
 
 Do not remove or implement these stubs without updating `config.EASS_WEIGHTS` and the corresponding ChromaDB vector dimensions simultaneously.
+
+## Known Limitations
+
+- **Finnhub news ordering**: Finnhub returns articles sorted by publication date (newest first), not by impact or relevance. The most breaking catalyst is rarely `articles[0]` — it is often buried in `articles[1+]`. The pipeline must scan all returned articles to find the highest-priority catalyst type, not just classify the first one. See `pipeline.py:_process_ticker` Step 3.

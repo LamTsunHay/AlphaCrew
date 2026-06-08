@@ -119,37 +119,100 @@ def _classify_catalyst_type_keyword(article: dict) -> str:
     return "market_movers"
 
 
-async def classify_catalyst_type_llm(article: dict, gemini_client) -> str:
-    """Classify catalyst type using Gemini Flash; falls back to keyword matching on failure.
+def select_best_catalyst(articles: list) -> str:
+    """Return the highest-priority catalyst type found across all articles.
 
-    Sends the article title + description to Gemini with the full label list and expects
-    exactly one label string in response. Any unexpected output triggers keyword fallback.
+    Classifies each article independently via classify_catalyst_type, then
+    selects the winner by CATALYST_PRIORITY rank. For an empty list, returns
+    'market_movers' directly; for all-generic articles, the loop returns
+    'market_movers' as the last entry in CATALYST_PRIORITY.
     """
-    valid_labels = config.CATALYST_COLLECTIONS + ["market_movers"]
-    label_list = "\n".join(f"- {lbl}" for lbl in valid_labels)
-    text = (article.get("title", "") + " " + article.get("description", ""))[:1500]
+    found = {classify_catalyst_type(a) for a in articles}
+    for catalyst in config.CATALYST_PRIORITY:
+        if catalyst in found:
+            return catalyst
+    return "market_movers"
 
-    prompt = (
-        "You are a financial news classifier. Given a news snippet, return EXACTLY one label "
-        "from the list below — nothing else, no punctuation, no explanation.\n\n"
-        f"Labels:\n{label_list}\n\n"
-        "Return 'market_movers' if no specific catalyst fits.\n\n"
-        f"News: {text}"
+
+def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
+    """Classify highest-impact catalyst and generate a 3-sentence summary in one Haiku call.
+
+    Sends all articles with a priority-ranked catalyst list so the LLM selects the
+    highest-rank catalyst across all articles and summarizes it in one pass.
+    Falls back to select_best_catalyst() if the LLM call raises an exception.
+    Returns None if articles is empty or the LLM response cannot be parsed.
+    """
+    if not articles:
+        return None
+
+    # Pre-screen with regex: if no specific catalyst found across all articles,
+    # skip the LLM call entirely — preserves the free-gate-before-paid invariant.
+    pre_type = select_best_catalyst(articles)
+    if pre_type == "market_movers":
+        winning = articles[0]
+        return {"catalyst_type": "market_movers", "winning_article": winning, "summary": "", "reasoning": ""}
+
+    ranked_catalysts = "\n".join(
+        f"{i + 1:2}. {cat}"
+        for i, cat in enumerate(config.CATALYST_PRIORITY)
     )
 
-    try:
-        response = await asyncio.to_thread(
-            gemini_client.models.generate_content,
-            model=config.GEMINI_CLASSIFY_MODEL,
-            contents=prompt,
-        )
-        result = response.text.strip().lower().replace('"', "").replace("'", "")
-        if result in valid_labels:
-            return result
-    except Exception as exc:
-        print(f"[PIPELINE] Gemini classify error, falling back to keyword: {exc}")
+    articles_text = "\n".join(
+        f"[{i}] {a.get('title', '')} | {a.get('description', '')} | {a.get('published_utc', '')}"
+        for i, a in enumerate(articles)
+    )
 
-    return _classify_catalyst_type_keyword(article)
+    system_prompt = (
+        "You are a financial catalyst analyst. Given news articles for a ticker, "
+        "identify the single highest-impact catalyst article.\n\n"
+        f"Catalyst types ranked by market impact (1 = highest):\n{ranked_catalysts}\n\n"
+        "Rules:\n"
+        "- Select the catalyst type with the lowest rank number present across any article.\n"
+        "- If multiple articles match the same top-rank type, prefer the one with the clearest data.\n"
+        "- Return ONLY valid JSON with no markdown or explanation:\n"
+        '{"catalyst_type": "<exact type from list>", "article_index": <0-based int>, '
+        '"summary": "<3 sentences: what happened, numerical magnitude, forward implication>", '
+        '"reasoning": "<one sentence>"}'
+    )
+
+    user_prompt = f"Ticker: {ticker}\n\nArticles:\n{articles_text[:4000]}"
+    if len(articles_text) > 4000:
+        visible = articles_text[:4000].count('\n[') + 1
+        print(f"[PIPELINE] {ticker}: articles_text truncated — {visible}/{len(articles)} articles visible to LLM")
+    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+
+    try:
+        raw = llm_client.chat(client, provider, model, system_prompt, user_prompt, config.LLM_MAX_TOKENS)
+    except Exception as exc:
+        print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_ERROR ({exc}) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
+
+    start = raw.find('{')
+    end = raw.rfind('}')
+    if start == -1 or end == -1 or end <= start:
+        print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (no JSON object) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
+    try:
+        result = json.loads(raw[start:end + 1])
+    except (json.JSONDecodeError, TypeError):
+        print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (invalid JSON) — falling back to regex")
+        catalyst_type = select_best_catalyst(articles)
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
+
+    if result.get("catalyst_type") not in config.CATALYST_PRIORITY:
+        result["catalyst_type"] = "market_movers"
+
+    idx = result.get("article_index", 0)
+    if not isinstance(idx, int) or idx < 0 or idx >= len(articles):
+        idx = 0
+    result["winning_article"] = articles[idx]
+
+    return result
 
 
 def extract_eass_inputs(articles: list, ticker: str) -> dict:
@@ -280,22 +343,6 @@ def calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict:
     }
 
 
-async def summarize_news_haiku(raw_text: str, ticker: str, client, provider: str) -> str:
-    """Summarize news catalyst in 3 sentences using Stage 3 LLM (Haiku or Groq equivalent)."""
-    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
-    return llm_client.chat(
-        client,
-        provider,
-        model,
-        (
-            "You are a financial analyst. Summarize the key catalyst facts in exactly 3 sentences. "
-            "Include: what happened, the numerical magnitude, and the forward implication. Be factual only."
-        ),
-        f"Ticker: {ticker}\n\nNews text:\n{raw_text[:3000]}",
-        config.LLM_MAX_TOKENS,
-    )
-
-
 async def _process_ticker(entry: dict, regime_data: dict, db_client, session: aiohttp.ClientSession,
                           client, provider: str, semaphore: asyncio.Semaphore,
                           gemini_client) -> dict | None:
@@ -314,8 +361,18 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: NO_CATALYST_FOUND")
             return None
 
-        # Step 3: Classify catalyst type from top article using Gemini Flash
-        catalyst_type = await classify_catalyst_type_llm(articles[0], gemini_client)
+        # Step 3: Classify catalyst type and summarize — single Haiku call across all articles
+        llm_result = classify_and_summarize(articles, ticker, client, provider)
+        if llm_result is None:
+            print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_FAILED")
+            return None
+        catalyst_type = llm_result["catalyst_type"]
+        winning_article = llm_result["winning_article"]
+        print(
+            f"[PIPELINE] {ticker}: CATALYST={catalyst_type} | "
+            f"scanned={len(articles)} articles | "
+            f"match=\"{winning_article['title']}\" ({winning_article.get('published_utc', 'n/a')})"
+        )
 
         # Step 4: Low-weight catalyst → skip
         if catalyst_type == "market_movers":
@@ -333,10 +390,8 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             print(f"[PIPELINE] {ticker}: EASS_BELOW_THRESHOLD ({eass['eass_score']})")
             return None
 
-        # Step 8: Haiku summarization
-        haiku_summary = await summarize_news_haiku(
-            eass_inputs["raw_text_combined"], ticker, client, provider
-        )
+        # Step 8: Summary already produced by classify_and_summarize in Step 3
+        haiku_summary = llm_result.get("summary", "")
 
         # Step 9: Build catalyst_data dict for ChromaDB vector
         catalyst_data = {

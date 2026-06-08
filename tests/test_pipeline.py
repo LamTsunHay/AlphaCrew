@@ -1,5 +1,6 @@
 """Tests for pipeline.py — catalyst classification, EASS math, run_pipeline skip logic."""
 
+import json
 import pytest
 import asyncio
 import os
@@ -161,8 +162,15 @@ async def test_run_pipeline_market_mover_skipped():
     """Tickers classified as market_movers are skipped with LOW_WEIGHT_CATALYST."""
     article = {"title": "Stock surges on heavy volume", "description": ""}
     mock_client = MagicMock()
+    mock_llm_response = json.dumps({
+        "catalyst_type": "market_movers",
+        "article_index": 0,
+        "summary": "Stock surged on heavy volume. No specific magnitude given. Outlook unclear.",
+        "reasoning": "Generic momentum article, no specific catalyst.",
+    })
     with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
-         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")), \
+         patch("pipeline.llm_client.chat", return_value=mock_llm_response):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
@@ -176,11 +184,208 @@ async def test_run_pipeline_low_eass_skipped():
     """Tickers with EASS < 2.0 are skipped."""
     article = {"title": "Company earns $1.00 vs $1.00 expected", "description": ""}
     mock_client = MagicMock()
+    mock_llm_response = json.dumps({
+        "catalyst_type": "earnings_beat_large",
+        "article_index": 0,
+        "summary": "Company reported EPS of $1.00 in line with $1.00 consensus. No beat or miss. Flat guidance.",
+        "reasoning": "Earnings article with no surprise component.",
+    })
     with patch("pipeline.fetch_news", new_callable=AsyncMock, return_value=[article]), \
-         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")):
+         patch("pipeline.llm_client.create_client", return_value=(mock_client, "anthropic")), \
+         patch("pipeline.llm_client.chat", return_value=mock_llm_response):
         result = await pipeline.run_pipeline(
             [{"ticker": "XYZ", "price": 100, "ema200": 90, "pre_market_gap_pct": 0.03, "rvol_945": 3.0}],
             {"regime": "BULLISH", "spy_pct_above_50sma": 0.02},
             MagicMock(),
         )
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# select_best_catalyst()
+# ---------------------------------------------------------------------------
+
+def test_select_best_catalyst_finds_buried_ma():
+    """articles[0] is generic noise; the catalyst is in articles[1]."""
+    articles = [
+        {"title": "Stock surges on heavy volume", "description": ""},
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_all_generic_returns_market_movers():
+    articles = [
+        {"title": "Stock surges on heavy volume", "description": ""},
+        {"title": "Trading session recap", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "market_movers"
+
+
+def test_select_best_catalyst_prefers_ma_over_earnings():
+    """M&A is higher priority than earnings even if earnings article comes first."""
+    articles = [
+        {"title": "Company reports strong earnings beat", "description": ""},
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_single_fda_article():
+    articles = [{"title": "FDA approved new drug NDA for XYZ", "description": ""}]
+    assert pipeline.select_best_catalyst(articles) == "fda_approval_nda"
+
+
+def test_select_best_catalyst_catalyst_in_description_field():
+    """Catalyst keyword in description (not title) must still be found."""
+    articles = [
+        {"title": "Market update", "description": "Company acquires rival in $2B deal"},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_duplicate_catalyst_type():
+    """Two articles with the same catalyst type should still return that type."""
+    articles = [
+        {"title": "Company XYZ to acquire Rival Corp", "description": ""},
+        {"title": "XYZ acquisition deal confirmed", "description": "acquiring target for $3B"},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "ma_acquirer"
+
+
+def test_select_best_catalyst_prefers_fda_over_guidance():
+    articles = [
+        {"title": "Company raises full-year guidance above expectations", "description": ""},
+        {"title": "FDA approved new drug NDA for XYZ", "description": ""},
+    ]
+    assert pipeline.select_best_catalyst(articles) == "fda_approval_nda"
+
+
+def test_select_best_catalyst_empty_list_returns_market_movers():
+    assert pipeline.select_best_catalyst([]) == "market_movers"
+
+
+# ---------------------------------------------------------------------------
+# classify_and_summarize()
+# ---------------------------------------------------------------------------
+
+def test_classify_and_summarize_returns_valid_structure():
+    """Happy path: LLM returns clean JSON with a valid catalyst type."""
+    articles = [
+        {"title": "Stock surges on heavy volume", "description": "", "published_utc": "2026-06-09T09:00:00"},
+        {"title": "Company XYZ to acquire Rival Corp", "description": "", "published_utc": "2026-06-09T08:00:00"},
+    ]
+    mock_response = json.dumps({
+        "catalyst_type": "ma_acquirer",
+        "article_index": 1,
+        "summary": "XYZ announced acquisition of Rival Corp. Deal valued at $2B premium. Expected to close Q4 2026.",
+        "reasoning": "M&A is highest-priority catalyst (rank 1) across all articles.",
+    })
+    with patch("llm_client.chat", return_value=mock_response):
+        result = pipeline.classify_and_summarize(articles, "XYZ", MagicMock(), "anthropic")
+    assert result["catalyst_type"] == "ma_acquirer"
+    assert result["winning_article"]["title"] == "Company XYZ to acquire Rival Corp"
+    assert "XYZ announced" in result["summary"]
+    assert "reasoning" in result
+
+
+def test_classify_and_summarize_fallback_on_invalid_catalyst_type():
+    """LLM returns a catalyst_type not in CATALYST_PRIORITY → fallback to market_movers."""
+    articles = [{"title": "Test headline", "description": "", "published_utc": ""}]
+    mock_response = json.dumps({
+        "catalyst_type": "HALLUCINATED_TYPE",
+        "article_index": 0,
+        "summary": "Some summary.",
+        "reasoning": "Some reasoning.",
+    })
+    with patch("llm_client.chat", return_value=mock_response):
+        result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
+    assert result["catalyst_type"] == "market_movers"
+    assert result["winning_article"] is not None
+    assert result["winning_article"]["title"] == "Test headline"
+
+
+def test_classify_and_summarize_falls_back_to_regex_on_bad_json():
+    """LLM returns non-JSON and no JSON object found → falls back to regex, not None."""
+    articles = [{"title": "Test headline", "description": "", "published_utc": ""}]
+    with patch("llm_client.chat", return_value="I cannot classify this."):
+        result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
+    assert result["catalyst_type"] == "market_movers"
+    assert result["winning_article"]["title"] == "Test headline"
+    assert result["summary"] == ""
+
+
+def test_classify_and_summarize_extracts_json_from_markdown_block():
+    """LLM wraps JSON in a markdown code fence → still parsed correctly."""
+    articles = [{"title": "FDA approved new drug NDA for XYZ", "description": "", "published_utc": ""}]
+    inner = json.dumps({
+        "catalyst_type": "fda_approval_nda",
+        "article_index": 0,
+        "summary": "FDA granted NDA approval. Drug covers $3B addressable market. Launch expected H1 2027.",
+        "reasoning": "FDA NDA approval is rank 3 catalyst.",
+    })
+    with patch("llm_client.chat", return_value=f"```json\n{inner}\n```"):
+        result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
+    assert result["catalyst_type"] == "fda_approval_nda"
+    assert "FDA granted NDA approval" in result["summary"]
+    assert result["winning_article"]["title"] == "FDA approved new drug NDA for XYZ"
+
+
+def test_classify_and_summarize_empty_articles_returns_none_without_calling_llm():
+    """Empty article list → returns None without calling the LLM."""
+    with patch("llm_client.chat") as mock_chat:
+        result = pipeline.classify_and_summarize([], "TEST", MagicMock(), "anthropic")
+    assert result is None
+    mock_chat.assert_not_called()
+
+
+def test_classify_and_summarize_out_of_bounds_article_index_fallback():
+    """LLM returns article_index beyond list length → falls back to index 0.
+
+    Uses an earnings article so the pre-screen passes and the LLM is actually called.
+    """
+    articles = [{"title": "Company reports strong earnings beat", "description": "", "published_utc": ""}]
+    mock_response = json.dumps({
+        "catalyst_type": "earnings_beat_large",
+        "article_index": 99,
+        "summary": "Beat estimates.",
+        "reasoning": "Earnings beat.",
+    })
+    with patch("llm_client.chat", return_value=mock_response):
+        result = pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
+    assert result["winning_article"] == articles[0]
+    assert result["catalyst_type"] == "earnings_beat_large"
+
+
+def test_classify_and_summarize_prompt_contains_full_ranked_catalyst_list():
+    """System prompt sent to LLM must contain every entry in CATALYST_PRIORITY with rank numbers.
+
+    Uses an M&A article so the pre-screen passes and the LLM is actually called.
+    """
+    articles = [{"title": "Company XYZ to acquire Rival Corp", "description": "", "published_utc": ""}]
+    mock_response = json.dumps({
+        "catalyst_type": "ma_acquirer",
+        "article_index": 0,
+        "summary": "XYZ acquires Rival Corp.",
+        "reasoning": "M&A catalyst.",
+    })
+    with patch("llm_client.chat", return_value=mock_response) as mock_chat:
+        pipeline.classify_and_summarize(articles, "TEST", MagicMock(), "anthropic")
+    system_prompt = mock_chat.call_args.args[3]  # 4th positional arg: chat(client, provider, model, system_prompt, ...)
+    for cat in config.CATALYST_PRIORITY:
+        assert cat in system_prompt, f"Missing catalyst type in prompt: {cat}"
+    assert "1. ma_acquirer" in system_prompt   # rank 1 anchor
+    assert f"{len(config.CATALYST_PRIORITY)}. market_movers" in system_prompt  # last rank anchor
+
+
+def test_classify_and_summarize_falls_back_to_regex_on_llm_exception():
+    """LLM raises an exception → falls back to select_best_catalyst regex path, returns non-None."""
+    articles = [
+        {"title": "Company XYZ to acquire Rival Corp", "description": "", "published_utc": ""},
+    ]
+    with patch("llm_client.chat", side_effect=Exception("API timeout")):
+        result = pipeline.classify_and_summarize(articles, "XYZ", MagicMock(), "anthropic")
+    assert result is not None
+    assert result["catalyst_type"] == "ma_acquirer"
+    assert result["summary"] == ""
+    assert result["winning_article"]["title"] == "Company XYZ to acquire Rival Corp"
