@@ -122,12 +122,12 @@ def _classify_catalyst_type_keyword(article: dict) -> str:
 def select_best_catalyst(articles: list) -> str:
     """Return the highest-priority catalyst type found across all articles.
 
-    Classifies each article independently via classify_catalyst_type, then
+    Classifies each article independently via _classify_catalyst_type_keyword, then
     selects the winner by CATALYST_PRIORITY rank. For an empty list, returns
     'market_movers' directly; for all-generic articles, the loop returns
     'market_movers' as the last entry in CATALYST_PRIORITY.
     """
-    found = {classify_catalyst_type(a) for a in articles}
+    found = {_classify_catalyst_type_keyword(a) for a in articles}
     for catalyst in config.CATALYST_PRIORITY:
         if catalyst in found:
             return catalyst
@@ -186,7 +186,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     except Exception as exc:
         print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_ERROR ({exc}) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
     start = raw.find('{')
@@ -194,14 +194,14 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     if start == -1 or end == -1 or end <= start:
         print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (no JSON object) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
     try:
         result = json.loads(raw[start:end + 1])
     except (json.JSONDecodeError, TypeError):
         print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (invalid JSON) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
     if result.get("catalyst_type") not in config.CATALYST_PRIORITY:

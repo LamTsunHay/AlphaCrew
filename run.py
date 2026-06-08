@@ -51,7 +51,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Override the live SPY regime check (for testing)",
     )
     args = parser.parse_args(argv)
-    if not args.tickers:
+    if not args.tickers or args.tickers == ["all"]:
         args.tickers = NASDAQ_100
     return args
 
