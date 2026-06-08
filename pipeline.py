@@ -118,6 +118,20 @@ def classify_catalyst_type(article: dict) -> str:
     return "market_movers"
 
 
+def select_best_catalyst(articles: list) -> str:
+    """Return the highest-priority catalyst type found across all articles.
+
+    Classifies each article independently via classify_catalyst_type, then
+    selects the winner by CATALYST_PRIORITY rank. Returns 'market_movers'
+    only if every article is generic or the list is empty.
+    """
+    found = {classify_catalyst_type(a) for a in articles}
+    for catalyst in config.CATALYST_PRIORITY:
+        if catalyst in found:
+            return catalyst
+    return "market_movers"
+
+
 def extract_eass_inputs(articles: list, ticker: str) -> dict:
     """Parse article text to extract numerical EASS inputs via regex."""
     combined = " ".join(
@@ -280,6 +294,7 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
             return None
 
         # Step 3: Classify catalyst type from top article
+        print(articles[0]);
         catalyst_type = classify_catalyst_type(articles[0])
 
         # Step 4: Low-weight catalyst → skip
