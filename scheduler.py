@@ -16,6 +16,7 @@ import regime_engine
 import pipeline
 import risk_auditor
 import database
+import notifier
 
 load_dotenv()
 
@@ -74,6 +75,7 @@ async def run_premarket_pipeline(db_client):
     if not sector_survivors:
         log_entries.append({"step": "ABORT", "reason": "NO_SECTOR_SURVIVORS"})
         risk_auditor.write_outputs([], log_entries)
+        await notifier.send_discord_premarket([], log_entries)
         print("[SCHEDULER] ABORT: NO_SECTOR_SURVIVORS")
         return
 
@@ -85,6 +87,7 @@ async def run_premarket_pipeline(db_client):
     if not individual_survivors:
         log_entries.append({"step": "ABORT", "reason": "NO_INDIVIDUAL_GATE_SURVIVORS"})
         risk_auditor.write_outputs([], log_entries)
+        await notifier.send_discord_premarket([], log_entries)
         print("[SCHEDULER] ABORT: NO_INDIVIDUAL_GATE_SURVIVORS")
         return
 
@@ -96,6 +99,7 @@ async def run_premarket_pipeline(db_client):
     if not earnings_survivors:
         log_entries.append({"step": "ABORT", "reason": "NO_EARNINGS_GATE_SURVIVORS"})
         risk_auditor.write_outputs([], log_entries)
+        await notifier.send_discord_premarket([], log_entries)
         print("[SCHEDULER] ABORT: NO_EARNINGS_GATE_SURVIVORS")
         return
 
@@ -114,6 +118,7 @@ async def run_premarket_pipeline(db_client):
     if not candidates:
         log_entries.append({"step": "ABORT", "reason": "NO_CANDIDATES_AFTER_PIPELINE"})
         risk_auditor.write_outputs([], log_entries)
+        await notifier.send_discord_premarket([], log_entries)
         print("[SCHEDULER] ABORT: NO_CANDIDATES_AFTER_PIPELINE")
         return
 
@@ -126,6 +131,7 @@ async def run_premarket_pipeline(db_client):
     if not leaders:
         log_entries.append({"step": "ABORT", "reason": "NO_LEADERS_IDENTIFIED"})
         risk_auditor.write_outputs([], log_entries)
+        await notifier.send_discord_premarket([], log_entries)
         print("[SCHEDULER] ABORT: NO_LEADERS_IDENTIFIED")
         return
 
@@ -158,6 +164,7 @@ async def run_premarket_pipeline(db_client):
 
     log_entries.extend(monitoring_queue)
     risk_auditor.write_outputs(strategy_cards, log_entries)
+    await notifier.send_discord_premarket(strategy_cards, log_entries)
     print("[SCHEDULER] PRE-MARKET PIPELINE COMPLETE")
 
 
@@ -226,6 +233,7 @@ async def run_live_volume_check(db_client):
     with open(config.LOG_QUEUE_PATH, "w") as f:
         json.dump(log_entries, f, indent=2, default=str)
 
+    await notifier.send_discord_rvol(log_entries)
     print("[SCHEDULER] LIVE VOLUME CHECK COMPLETE")
 
 
