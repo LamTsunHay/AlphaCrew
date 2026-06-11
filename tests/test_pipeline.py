@@ -266,6 +266,38 @@ def test_select_best_catalyst_empty_list_returns_market_movers():
 
 
 # ---------------------------------------------------------------------------
+# _truncate_description()
+# ---------------------------------------------------------------------------
+
+def test_truncate_description_empty_string():
+    assert pipeline._truncate_description("") == ""
+
+def test_truncate_description_single_sentence():
+    assert pipeline._truncate_description("One sentence only.") == "One sentence only."
+
+def test_truncate_description_exactly_three_sentences():
+    text = "First sentence. Second sentence. Third sentence."
+    assert pipeline._truncate_description(text) == text
+
+def test_truncate_description_more_than_three_sentences():
+    text = "One. Two. Three. Four. Five."
+    assert pipeline._truncate_description(text) == "One. Two. Three."
+
+def test_truncate_description_exclamation_and_question():
+    text = "Wow! Really? Yes. Ignored."
+    assert pipeline._truncate_description(text) == "Wow! Really? Yes."
+
+def test_truncate_description_no_terminal_punctuation():
+    """Text with no sentence-ending punctuation is returned whole."""
+    text = "A long run-on description with no period"
+    assert pipeline._truncate_description(text) == text
+
+def test_truncate_description_custom_max():
+    text = "One. Two. Three. Four."
+    assert pipeline._truncate_description(text, max_sentences=2) == "One. Two."
+
+
+# ---------------------------------------------------------------------------
 # classify_and_summarize()
 # ---------------------------------------------------------------------------
 
@@ -340,10 +372,7 @@ def test_classify_and_summarize_empty_articles_returns_none_without_calling_llm(
 
 
 def test_classify_and_summarize_out_of_bounds_article_index_fallback():
-    """LLM returns article_index beyond list length → falls back to index 0.
-
-    Uses an earnings article so the pre-screen passes and the LLM is actually called.
-    """
+    """LLM returns article_index beyond list length → falls back to index 0."""
     articles = [{"title": "Company reports strong earnings beat", "description": "", "published_utc": ""}]
     mock_response = json.dumps({
         "catalyst_type": "earnings_beat_large",
@@ -358,10 +387,7 @@ def test_classify_and_summarize_out_of_bounds_article_index_fallback():
 
 
 def test_classify_and_summarize_prompt_contains_full_ranked_catalyst_list():
-    """System prompt sent to LLM must contain every entry in CATALYST_PRIORITY with rank numbers.
-
-    Uses an M&A article so the pre-screen passes and the LLM is actually called.
-    """
+    """System prompt sent to LLM must contain every entry in CATALYST_PRIORITY with rank numbers."""
     articles = [{"title": "Company XYZ to acquire Rival Corp", "description": "", "published_utc": ""}]
     mock_response = json.dumps({
         "catalyst_type": "ma_acquirer",
@@ -389,3 +415,18 @@ def test_classify_and_summarize_falls_back_to_regex_on_llm_exception():
     assert result["catalyst_type"] == "ma_acquirer"
     assert result["summary"] == ""
     assert result["winning_article"]["title"] == "Company XYZ to acquire Rival Corp"
+
+
+def test_classify_and_summarize_calls_llm_for_generic_articles():
+    """Generic articles with no keyword match must reach the LLM — pre-screen gate removed."""
+    articles = [{"title": "Stock surges on heavy volume", "description": "Trading was active today.", "published_utc": ""}]
+    mock_response = json.dumps({
+        "catalyst_type": "market_movers",
+        "article_index": 0,
+        "summary": "",
+        "reasoning": "No specific catalyst found.",
+    })
+    with patch("llm_client.chat", return_value=mock_response) as mock_chat:
+        result = pipeline.classify_and_summarize(articles, "XYZ", MagicMock(), "anthropic")
+    mock_chat.assert_called_once()
+    assert result["catalyst_type"] == "market_movers"

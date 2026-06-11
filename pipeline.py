@@ -85,7 +85,7 @@ async def fetch_news(ticker: str, session: aiohttp.ClientSession) -> list:
         raise ValueError(f"Unknown NEWS_PROVIDER: {config.NEWS_PROVIDER!r}. Use 'polygon' or 'finnhub'.")
 
 
-def _classify_catalyst_type_keyword(article: dict) -> str:
+def classify_catalyst_type(article: dict) -> str:
     """Keyword fallback: classify catalyst type from article using substring priority order."""
     text = (article.get("title", "") + " " + article.get("description", "")).lower()
 
@@ -120,35 +120,41 @@ def _classify_catalyst_type_keyword(article: dict) -> str:
 def select_best_catalyst(articles: list) -> str:
     """Return the highest-priority catalyst type found across all articles.
 
-    Classifies each article independently via _classify_catalyst_type_keyword, then
+    Classifies each article independently via classify_catalyst_type, then
     selects the winner by CATALYST_PRIORITY rank. For an empty list, returns
     'market_movers' directly; for all-generic articles, the loop returns
     'market_movers' as the last entry in CATALYST_PRIORITY.
     """
-    found = {_classify_catalyst_type_keyword(a) for a in articles}
+    found = {classify_catalyst_type(a) for a in articles}
     for catalyst in config.CATALYST_PRIORITY:
         if catalyst in found:
             return catalyst
     return "market_movers"
 
 
-def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
-    """Classify highest-impact catalyst and generate a 3-sentence summary in one Haiku call.
+def _truncate_description(text: str, max_sentences: int = 3) -> str:
+    """Return the first max_sentences sentences of text, or the whole string if fewer exist.
 
-    Sends all articles with a priority-ranked catalyst list so the LLM selects the
-    highest-rank catalyst across all articles and summarizes it in one pass.
+    Splits text on sentence boundaries (. ! ?) and returns the first max_sentences.
+    If text contains fewer sentences, returns the whole string unchanged.
+    """
+    if not text:
+        return ""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return " ".join(sentences[:max_sentences])
+
+
+def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
+    """Classify highest-impact catalyst and generate a 3-sentence summary in one LLM call.
+
+    All articles are sent to the LLM regardless of keyword content — descriptions are
+    truncated to 3 sentences for cost control. The LLM selects the highest-rank catalyst
+    across all articles and summarizes it in one pass.
     Falls back to select_best_catalyst() if the LLM call raises an exception.
     Returns None if articles is empty or the LLM response cannot be parsed.
     """
     if not articles:
         return None
-
-    # Pre-screen with regex: if no specific catalyst found across all articles,
-    # skip the LLM call entirely — preserves the free-gate-before-paid invariant.
-    pre_type = select_best_catalyst(articles)
-    if pre_type == "market_movers":
-        winning = articles[0]
-        return {"catalyst_type": "market_movers", "winning_article": winning, "summary": "", "reasoning": ""}
 
     ranked_catalysts = "\n".join(
         f"{i + 1:2}. {cat}"
@@ -156,7 +162,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     )
 
     articles_text = "\n".join(
-        f"[{i}] {a.get('title', '')} | {a.get('description', '')} | {a.get('published_utc', '')}"
+        f"[{i}] {a.get('title', '')} | {_truncate_description(a.get('description', ''), 3)} | {a.get('published_utc', '')}"
         for i, a in enumerate(articles)
     )
 
@@ -184,7 +190,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     except Exception as exc:
         print(f"[PIPELINE] {ticker}: LLM_CLASSIFY_ERROR ({exc}) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
     start = raw.find('{')
@@ -192,14 +198,14 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     if start == -1 or end == -1 or end <= start:
         print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (no JSON object) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
     try:
         result = json.loads(raw[start:end + 1])
     except (json.JSONDecodeError, TypeError):
         print(f"[PIPELINE] {ticker}: LLM_PARSE_FAILED (invalid JSON) — falling back to regex")
         catalyst_type = select_best_catalyst(articles)
-        winning = next((a for a in articles if _classify_catalyst_type_keyword(a) == catalyst_type), articles[0])
+        winning = next((a for a in articles if classify_catalyst_type(a) == catalyst_type), articles[0])
         return {"catalyst_type": catalyst_type, "winning_article": winning, "summary": "", "reasoning": ""}
 
     if result.get("catalyst_type") not in config.CATALYST_PRIORITY:
