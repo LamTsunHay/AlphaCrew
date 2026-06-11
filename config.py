@@ -19,8 +19,8 @@ TESTING_MODE        = True
 
 # Gemini — free-tier provider used when TESTING_MODE=True
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_STAGE_3_MODEL = "gemini-2.0-flash-lite"   # replaces Haiku
-GEMINI_STAGE_4_MODEL = "gemini-2.0-flash"         # replaces Sonnet
+GEMINI_STAGE_3_MODEL = "gemini-3.1-flash-lite"   # replaces Haiku
+GEMINI_STAGE_4_MODEL = "gemini-3.1-flash-lite"   # replaces Sonnet
 
 # Regime Filter
 REGIME_INDICATOR = "SPY"
