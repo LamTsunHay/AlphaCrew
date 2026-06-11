@@ -80,8 +80,12 @@ def _get_premarket_gap(ticker: str) -> float:
     return 0.0
 
 
-async def main(argv=None) -> None:
-    """Orchestrate the full premarket pipeline from CLI args."""
+async def main(argv=None, test_mode: bool | None = None) -> tuple[list, list]:
+    """Orchestrate the full premarket pipeline from CLI args.
+
+    test_mode=True uses Gemini, False uses Claude; None falls back to config.TESTING_MODE.
+    Returns (strategy_cards, log_entries) for programmatic callers (e.g. API layer).
+    """
     args = parse_args(argv)
 
     print(f"[RUN] Tickers: {args.tickers}")
@@ -107,7 +111,7 @@ async def main(argv=None) -> None:
 
     if not sector_survivors:
         notifier.print_to_terminal([], log_entries)
-        return
+        return [], log_entries
 
     # Volatility + trend gate
     individual_survivors = regime_engine.apply_individual_gates(sector_survivors)
@@ -116,7 +120,7 @@ async def main(argv=None) -> None:
 
     if not individual_survivors:
         notifier.print_to_terminal([], log_entries)
-        return
+        return [], log_entries
 
     # Earnings proximity gate
     earnings_survivors = regime_engine.apply_earnings_gate(individual_survivors)
@@ -125,7 +129,7 @@ async def main(argv=None) -> None:
 
     if not earnings_survivors:
         notifier.print_to_terminal([], log_entries)
-        return
+        return [], log_entries
 
     # Pre-market gap fetch — needed by pipeline and post-pipeline leadership gate.
     # Leadership dedup is deferred until after news fetch so a high-gap ticker
@@ -143,7 +147,7 @@ async def main(argv=None) -> None:
 
     if not candidates:
         notifier.print_to_terminal([], log_entries)
-        return
+        return [], log_entries
 
     # Sector leadership gate — applied post-pipeline so only catalyst-bearing
     # tickers compete for each industry slot
@@ -153,10 +157,10 @@ async def main(argv=None) -> None:
 
     if not leaders:
         notifier.print_to_terminal([], log_entries)
-        return
+        return [], log_entries
 
     # Sonnet audit + strategy cards
-    client, provider = llm_client.create_client()
+    client, provider = llm_client.create_client(test_mode=test_mode)
     strategy_cards = []
     for candidate in leaders:
         audit = await risk_auditor.run_sonnet_audit(candidate, client, provider)
@@ -172,6 +176,7 @@ async def main(argv=None) -> None:
         log_entries.append({"ticker": candidate["ticker"], "status": "QUALIFIED"})
 
     notifier.print_to_terminal(strategy_cards, log_entries)
+    return strategy_cards, log_entries
 
 
 if __name__ == "__main__":

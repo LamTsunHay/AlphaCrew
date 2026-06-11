@@ -8,12 +8,14 @@ import anthropic
 import config
 
 
-def create_client():
+def create_client(test_mode: bool | None = None):
     """Return (client, provider) for the active LLM provider.
 
-    Provider is 'anthropic' when TESTING_MODE is False, 'gemini' when True.
+    Provider is 'anthropic' when test_mode (or config.TESTING_MODE) is False,
+    'gemini' when True. Explicit test_mode arg takes precedence over config.
     """
-    if config.TESTING_MODE:
+    use_gemini = config.TESTING_MODE if test_mode is None else test_mode
+    if use_gemini:
         # Lazy import: avoids loading google-genai SDK when testing mode is inactive
         from google import genai
         client = genai.Client(api_key=config.GEMINI_API_KEY)
