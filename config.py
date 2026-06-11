@@ -15,7 +15,7 @@ LLM_STAGE_4_PREMIUM = "claude-sonnet-4-6"
 LLM_MAX_TOKENS = 1000
 
 # Testing mode — set True to route both LLM stages to Gemini (free tier)
-TESTING_MODE        = False
+TESTING_MODE        = True
 
 # Gemini — free-tier provider used when TESTING_MODE=True
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
