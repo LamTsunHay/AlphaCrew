@@ -24,16 +24,16 @@ def test_create_client_returns_anthropic_by_default(monkeypatch):
     assert isinstance(client, anthropic.Anthropic)
 
 
-def test_create_client_returns_groq_in_testing_mode(monkeypatch):
-    """With TESTING_MODE=True, create_client() returns an OpenAI client and 'groq'."""
+def test_create_client_returns_gemini_in_testing_mode(monkeypatch):
+    """With TESTING_MODE=True, create_client() returns a Gemini client and 'gemini'."""
     monkeypatch.setattr(config, "TESTING_MODE", True)
-    monkeypatch.setattr(config, "GROQ_API_KEY", "test-key")
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "test-gemini-key")
     import importlib, llm_client
     importlib.reload(llm_client)
     client, provider = llm_client.create_client()
-    assert provider == "groq"
-    from openai import OpenAI
-    assert isinstance(client, OpenAI)
+    assert provider == "gemini"
+    from google import genai
+    assert isinstance(client, genai.Client)
 
 
 # ---------------------------------------------------------------------------
@@ -61,24 +61,22 @@ def test_chat_anthropic_path():
     )
 
 
-def test_chat_groq_path():
-    """chat() with 'groq' calls client.chat.completions.create() and returns text."""
+def test_chat_gemini_path():
+    """chat() with 'gemini' calls client.models.generate_content() and returns text."""
     import llm_client
     mock_client = MagicMock()
     mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=MagicMock(content="groq result"))]
-    mock_client.chat.completions.create.return_value = mock_response
+    mock_response.text = "gemini result"
+    mock_client.models.generate_content.return_value = mock_response
 
     result = llm_client.chat(
-        mock_client, "groq", "llama-3.1-8b-instant", "sys prompt", "user input", 100
+        mock_client, "gemini", "gemini-2.0-flash-lite", "sys prompt", "user input", 100
     )
 
-    assert result == "groq result"
-    mock_client.chat.completions.create.assert_called_once_with(
-        model="llama-3.1-8b-instant",
-        max_tokens=100,
-        messages=[
-            {"role": "system", "content": "sys prompt"},
-            {"role": "user", "content": "user input"},
-        ],
-    )
+    assert result == "gemini result"
+    mock_client.models.generate_content.assert_called_once()
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["model"] == "gemini-2.0-flash-lite"
+    assert call_kwargs["contents"] == "user input"
+    assert call_kwargs["config"].system_instruction == "sys prompt"
+    assert call_kwargs["config"].max_output_tokens == 100

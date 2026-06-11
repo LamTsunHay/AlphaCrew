@@ -13,8 +13,6 @@ import datetime
 import os
 import config
 import database
-from google import genai as google_genai
-
 
 async def fetch_polygon_news(ticker: str, session: aiohttp.ClientSession) -> list:
     """Fetch recent news articles from Polygon.io for a ticker."""
@@ -179,7 +177,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     if len(articles_text) > 4000:
         visible = articles_text[:4000].count('\n[') + 1
         print(f"[PIPELINE] {ticker}: articles_text truncated — {visible}/{len(articles)} articles visible to LLM")
-    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+    model = config.GEMINI_STAGE_3_MODEL if provider == "gemini" else config.LLM_STAGE_3_FAST
 
     try:
         raw = llm_client.chat(client, provider, model, system_prompt, user_prompt, config.LLM_MAX_TOKENS)
@@ -344,8 +342,7 @@ def calculate_eass(eass_inputs: dict, catalyst_type: str) -> dict:
 
 
 async def _process_ticker(entry: dict, regime_data: dict, db_client, session: aiohttp.ClientSession,
-                          client, provider: str, semaphore: asyncio.Semaphore,
-                          gemini_client) -> dict | None:
+                          client, provider: str, semaphore: asyncio.Semaphore) -> dict | None:
     """Process a single ticker through the full paid pipeline.
 
     Returns a qualified candidate dict or None if the ticker is filtered at any step.
@@ -448,11 +445,10 @@ async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client)
     to avoid paying sequential latency for Polygon fetches and LLM calls.
     """
     semaphore = asyncio.Semaphore(5)
-    gemini_client = google_genai.Client(api_key=config.GEMINI_API_KEY)
     async with aiohttp.ClientSession() as session:
         client, provider = llm_client.create_client()
         tasks = [
-            _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore, gemini_client)
+            _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore)
             for entry in tickers_with_metrics
         ]
         results = await asyncio.gather(*tasks)

@@ -15,7 +15,8 @@ python scheduler.py
 ```
 
 **Required environment variables** (in `.env`):
-- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_API_KEY` ← used when `TESTING_MODE=False`
+- `GEMINI_API_KEY` ← used when `TESTING_MODE=True` (default)
 - `FINNHUB_API_KEY` ← active news provider (set `NEWS_PROVIDER="finnhub"` in `config.py`)
 - `POLYGON_API_KEY` ← kept for future use; not active
 
@@ -52,14 +53,18 @@ Six-module system with a strict cost-minimization principle: **all free data gat
 6. **NEWS GATE START**: Finnhub news fetch (active provider) — `pipeline`
 7. Catalyst classification + EASS scoring — `pipeline`
 8. ChromaDB historical similarity query — `pipeline` → `database`
-9. Claude Sonnet structural audit — `risk_auditor`
+9. LLM structural audit (Sonnet or Gemini depending on `TESTING_MODE`) — `risk_auditor`
 
 ## LLM Models
 
-| Stage | Model | Purpose |
-|---|---|---|
-| Stage 3 | `claude-haiku-4-5-20251001` | Fast 3-sentence news summarization |
-| Stage 4 | `claude-sonnet-4-6` | Premium structural risk audit |
+Two provider modes controlled by `TESTING_MODE` in `config.py`:
+
+| Stage | Production (`TESTING_MODE=False`) | Testing (`TESTING_MODE=True`) | Purpose |
+|---|---|---|---|
+| Stage 3 | `claude-haiku-4-5-20251001` | `gemini-3.1-flash-lite` | Fast catalyst classification + summarization |
+| Stage 4 | `claude-sonnet-4-6` | `gemini-3.1-flash-lite` | Structural risk audit |
+
+LLM provider switching is fully encapsulated in `llm_client.py` — callers never import `anthropic` or `google.genai` directly.
 
 ## Critical Rules
 
