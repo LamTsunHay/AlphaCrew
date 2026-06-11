@@ -92,7 +92,7 @@ def _make_leadership_gate_that_records(call_log):
 
 def _make_pipeline_that_records(call_log):
     """Return a fake pipeline that records its input and returns candidates."""
-    async def fake(tickers_with_metrics, regime_data, db_client):
+    async def fake(tickers_with_metrics, regime_data, db_client, test_mode=None):
         call_log.append([e["ticker"] for e in tickers_with_metrics])
         return PIPELINE_CANDIDATES
     return fake
