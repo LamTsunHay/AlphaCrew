@@ -177,7 +177,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     if len(articles_text) > 4000:
         visible = articles_text[:4000].count('\n[') + 1
         print(f"[PIPELINE] {ticker}: articles_text truncated — {visible}/{len(articles)} articles visible to LLM")
-    model = config.GROQ_STAGE_3_MODEL if provider == "groq" else config.LLM_STAGE_3_FAST
+    model = config.GEMINI_STAGE_3_MODEL if provider == "gemini" else config.LLM_STAGE_3_FAST
 
     try:
         raw = llm_client.chat(client, provider, model, system_prompt, user_prompt, config.LLM_MAX_TOKENS)
