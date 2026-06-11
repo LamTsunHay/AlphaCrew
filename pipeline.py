@@ -132,6 +132,18 @@ def select_best_catalyst(articles: list) -> str:
     return "market_movers"
 
 
+def _truncate_description(text: str, max_sentences: int = 3) -> str:
+    """Return the first max_sentences sentences of text, or the whole string if fewer exist.
+
+    Splits text on sentence boundaries (. ! ?) and returns the first max_sentences.
+    If text contains fewer sentences, returns the whole string unchanged.
+    """
+    if not text:
+        return ""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return " ".join(sentences[:max_sentences])
+
+
 def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
     """Classify highest-impact catalyst and generate a 3-sentence summary in one Haiku call.
 

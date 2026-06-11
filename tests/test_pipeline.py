@@ -266,6 +266,38 @@ def test_select_best_catalyst_empty_list_returns_market_movers():
 
 
 # ---------------------------------------------------------------------------
+# _truncate_description()
+# ---------------------------------------------------------------------------
+
+def test_truncate_description_empty_string():
+    assert pipeline._truncate_description("") == ""
+
+def test_truncate_description_single_sentence():
+    assert pipeline._truncate_description("One sentence only.") == "One sentence only."
+
+def test_truncate_description_exactly_three_sentences():
+    text = "First sentence. Second sentence. Third sentence."
+    assert pipeline._truncate_description(text) == text
+
+def test_truncate_description_more_than_three_sentences():
+    text = "One. Two. Three. Four. Five."
+    assert pipeline._truncate_description(text) == "One. Two. Three."
+
+def test_truncate_description_exclamation_and_question():
+    text = "Wow! Really? Yes. Ignored."
+    assert pipeline._truncate_description(text) == "Wow! Really? Yes."
+
+def test_truncate_description_no_terminal_punctuation():
+    """Text with no sentence-ending punctuation is returned whole."""
+    text = "A long run-on description with no period"
+    assert pipeline._truncate_description(text) == text
+
+def test_truncate_description_custom_max():
+    text = "One. Two. Three. Four."
+    assert pipeline._truncate_description(text, max_sentences=2) == "One. Two."
+
+
+# ---------------------------------------------------------------------------
 # classify_and_summarize()
 # ---------------------------------------------------------------------------
 
