@@ -145,22 +145,16 @@ def _truncate_description(text: str, max_sentences: int = 3) -> str:
 
 
 def classify_and_summarize(articles: list, ticker: str, client, provider: str) -> dict | None:
-    """Classify highest-impact catalyst and generate a 3-sentence summary in one Haiku call.
+    """Classify highest-impact catalyst and generate a 3-sentence summary in one LLM call.
 
-    Sends all articles with a priority-ranked catalyst list so the LLM selects the
-    highest-rank catalyst across all articles and summarizes it in one pass.
+    All articles are sent to the LLM regardless of keyword content — descriptions are
+    truncated to 3 sentences for cost control. The LLM selects the highest-rank catalyst
+    across all articles and summarizes it in one pass.
     Falls back to select_best_catalyst() if the LLM call raises an exception.
     Returns None if articles is empty or the LLM response cannot be parsed.
     """
     if not articles:
         return None
-
-    # Pre-screen with regex: if no specific catalyst found across all articles,
-    # skip the LLM call entirely — preserves the free-gate-before-paid invariant.
-    pre_type = select_best_catalyst(articles)
-    if pre_type == "market_movers":
-        winning = articles[0]
-        return {"catalyst_type": "market_movers", "winning_article": winning, "summary": "", "reasoning": ""}
 
     ranked_catalysts = "\n".join(
         f"{i + 1:2}. {cat}"
@@ -168,7 +162,7 @@ def classify_and_summarize(articles: list, ticker: str, client, provider: str) -
     )
 
     articles_text = "\n".join(
-        f"[{i}] {a.get('title', '')} | {a.get('description', '')} | {a.get('published_utc', '')}"
+        f"[{i}] {a.get('title', '')} | {_truncate_description(a.get('description', ''), 3)} | {a.get('published_utc', '')}"
         for i, a in enumerate(articles)
     )
 
