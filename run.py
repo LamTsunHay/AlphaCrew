@@ -142,7 +142,8 @@ async def main(argv=None, test_mode: bool | None = None) -> tuple[list, list]:
 
     # Paid pipeline gate — all earnings survivors enter
     db_client = database.initialize_database()
-    candidates = await pipeline.run_pipeline(earnings_survivors, regime_data, db_client)
+    candidates = await pipeline.run_pipeline(earnings_survivors, regime_data, db_client,
+                                              test_mode=test_mode)
     log_entries.append({"step": "PIPELINE", "qualified_count": len(candidates)})
 
     if not candidates:

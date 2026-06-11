@@ -438,15 +438,17 @@ async def _process_ticker(entry: dict, regime_data: dict, db_client, session: ai
         }
 
 
-async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client) -> list:
+async def run_pipeline(tickers_with_metrics: list, regime_data: dict, db_client,
+                       test_mode: bool | None = None) -> list:
     """Main pipeline coordinator. Only called after all free gates have passed.
 
     Processes all tickers concurrently (up to 5 at a time) using asyncio.gather
     to avoid paying sequential latency for Polygon fetches and LLM calls.
+    test_mode is forwarded to llm_client.create_client(); None falls back to config.TESTING_MODE.
     """
     semaphore = asyncio.Semaphore(5)
     async with aiohttp.ClientSession() as session:
-        client, provider = llm_client.create_client()
+        client, provider = llm_client.create_client(test_mode=test_mode)
         tasks = [
             _process_ticker(entry, regime_data, db_client, session, client, provider, semaphore)
             for entry in tickers_with_metrics
