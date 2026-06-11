@@ -14,16 +14,13 @@ LLM_STAGE_3_FAST = "claude-haiku-4-5-20251001"
 LLM_STAGE_4_PREMIUM = "claude-sonnet-4-6"
 LLM_MAX_TOKENS = 1000
 
-# Testing mode — set True to route both LLM stages to Groq (free tier)
+# Testing mode — set True to route both LLM stages to Gemini (free tier)
 TESTING_MODE        = False
-GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "")
-GROQ_BASE_URL       = "https://api.groq.com/openai/v1"
-GROQ_STAGE_3_MODEL  = "llama-3.1-8b-instant"     # replaces Haiku
-GROQ_STAGE_4_MODEL  = "llama-3.3-70b-versatile"  # replaces Sonnet
 
-# Gemini Flash — free-tier catalyst classifier
+# Gemini — free-tier provider used when TESTING_MODE=True
 GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_CLASSIFY_MODEL = "gemini-3.1-flash-lite"
+GEMINI_STAGE_3_MODEL = "gemini-2.0-flash-lite"   # replaces Haiku
+GEMINI_STAGE_4_MODEL = "gemini-2.0-flash"         # replaces Sonnet
 
 # Regime Filter
 REGIME_INDICATOR = "SPY"

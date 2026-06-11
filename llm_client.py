@@ -1,6 +1,6 @@
-"""Unified LLM client factory for Anthropic and Groq (OpenAI-compatible) providers.
+"""Unified LLM client factory for Anthropic and Gemini providers.
 
-All LLM SDK details are contained here. Callers never import anthropic or openai directly.
+All LLM SDK details are contained here. Callers never import anthropic or google.genai directly.
 """
 
 import os
@@ -11,15 +11,13 @@ import config
 def create_client():
     """Return (client, provider) for the active LLM provider.
 
-    Provider is 'anthropic' when TESTING_MODE is False, 'groq' when True.
-    API keys are read from environment first, then fall back to config values.
+    Provider is 'anthropic' when TESTING_MODE is False, 'gemini' when True.
     """
     if config.TESTING_MODE:
-        # Lazy import: avoids loading openai SDK when testing mode is inactive
-        from openai import OpenAI
-        api_key = os.environ.get("GROQ_API_KEY", config.GROQ_API_KEY)
-        client = OpenAI(base_url=config.GROQ_BASE_URL, api_key=api_key)
-        return client, "groq"
+        # Lazy import: avoids loading google-genai SDK when testing mode is inactive
+        from google import genai
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        return client, "gemini"
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     client = anthropic.Anthropic(api_key=api_key)
     return client, "anthropic"
@@ -28,19 +26,20 @@ def create_client():
 def chat(client, provider: str, model: str, system: str, user: str, max_tokens: int) -> str:
     """Send a single-turn chat request and return the response text.
 
-    Translates between anthropic.messages.create() and openai.chat.completions.create()
+    Translates between anthropic.messages.create() and google.genai generate_content()
     so callers are insulated from SDK differences.
     """
-    if provider == "groq":
-        response = client.chat.completions.create(
+    if provider == "gemini":
+        from google.genai import types
+        response = client.models.generate_content(
             model=model,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            contents=user,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+            ),
         )
-        return response.choices[0].message.content
+        return response.text
     message = client.messages.create(
         model=model,
         max_tokens=max_tokens,

@@ -18,7 +18,7 @@ _AUDIT_SAFE_DEFAULT = {
 
 
 async def run_sonnet_audit(candidate: dict, client, provider: str) -> dict:
-    """Run structural risk audit on a qualified candidate using Stage 4 LLM (Sonnet or Groq equivalent)."""
+    """Run structural risk audit on a qualified candidate using Stage 4 LLM (Sonnet or Gemini equivalent)."""
     system_prompt = (
         "You are a senior institutional risk analyst. Your job is to identify "
         "structural threats that quantitative scores cannot detect. Analyze the "
@@ -33,7 +33,7 @@ async def run_sonnet_audit(candidate: dict, client, provider: str) -> dict:
         "  entry_strategy: MARKET_OPEN | PULLBACK_LIMIT_21EMA | DO_NOT_ENTER\n"
         "  audit_note: one sentence summary"
     )
-    model = config.GROQ_STAGE_4_MODEL if provider == "groq" else config.LLM_STAGE_4_PREMIUM
+    model = config.GEMINI_STAGE_4_MODEL if provider == "gemini" else config.LLM_STAGE_4_PREMIUM
 
     try:
         raw = llm_client.chat(
