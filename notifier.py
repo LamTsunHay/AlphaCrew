@@ -31,3 +31,15 @@ def send_telegram(strategy_cards: list, log_entries: list) -> None:
     # To activate: pip install python-telegram-bot, add TELEGRAM_BOT_TOKEN
     # and TELEGRAM_CHANNEL_ID to .env, then implement with telegram.Bot.send_message()
     pass
+
+
+async def send_discord_premarket(strategy_cards: list, log_entries: list) -> None:
+    """Push AlphaCrew premarket strategy card embeds to Discord via webhook."""
+    import discord_notifier
+    await discord_notifier.send_strategy_cards(strategy_cards, log_entries)
+
+
+async def send_discord_rvol(log_entries: list) -> None:
+    """Push the 9:45 AM RVOL confirmation summary embed to Discord via webhook."""
+    import discord_notifier
+    await discord_notifier.send_rvol_update(log_entries)
